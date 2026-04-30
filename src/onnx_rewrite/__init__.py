@@ -4,13 +4,24 @@ from .analysis import AuditSummary, audit_model, audit_path
 from .checker.op_checker import OpChecker
 from .core import OptimizationResult, UnsupportedOpError, optimize_model
 from .runtime import LatencyResult, ValidationResult, build_inputs_for_model, compare_models, measure_latency
-from .specs import ALL_BENCHMARK_MODELS, EXTENDED_BENCHMARK_MODELS, PRIORITY_MODELS, SUPPORTED_OPS
+from .specs import (
+    ALL_BENCHMARK_MODELS,
+    BENCHMARK_DOWNLOAD_SPECS,
+    BENCHMARK_ONNX_OPSET,
+    EXTENDED_BENCHMARK_MODELS,
+    LOGICAL_OPSETS,
+    PRIORITY_MODELS,
+    SUPPORTED_OPS,
+)
 
 __all__ = [
     "ALL_BENCHMARK_MODELS",
     "AuditSummary",
+    "BENCHMARK_DOWNLOAD_SPECS",
+    "BENCHMARK_ONNX_OPSET",
     "EXTENDED_BENCHMARK_MODELS",
     "LatencyResult",
+    "LOGICAL_OPSETS",
     "OpChecker",
     "OptimizationResult",
     "PRIORITY_MODELS",

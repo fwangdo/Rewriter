@@ -19,6 +19,8 @@ venv/
 
 # ONNX models
 *.onnx
+*.onnx_data
+benchmarks/onnx/
 
 # Misc
 *.log

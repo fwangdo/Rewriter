@@ -3,84 +3,139 @@ from __future__ import annotations
 from pathlib import Path
 
 
-SUPPORTED_OPS: frozenset[str] = frozenset(
-    {
-        "Add",
-        "AveragePool",
-        "Cast",
-        "Concat",
-        "Constant",
-        "ConstantOfShape",
-        "Conv",
-        "Cos",
-        "Sub",
-        "Div",
-        "Equal",
-        "Erf",
-        "Expand",
-        "Flatten",
-        "Gather",
-        "GatherElements",
-        "Gelu",
-        "Gemm",
-        "GlobalAveragePool",
-        "HardSigmoid",
-        "HardSwish",
-        "IsNaN",
-        "LeakyRelu",
-        "Less",
-        "LessOrEqual",
-        "MatMul",
-        "Max",
-        "MaxPool",
-        "Min",
-        "Mod",
-        "Mul",
-        "Neg",
-        "Pad",
-        "Pow",
-        "Range",
-        "Relu",
-        "ReduceMax",
-        "Reshape",
-        "ReduceMean",
-        "ReduceSum",
-        "Resize",
-        "Shape",
-        "Sigmoid",
-        "Sin",
-        "Slice",
-        "Split",
-        "Softmax",
-        "Sqrt",
-        "Tanh",
-        "Squeeze",
-        "Tile",
-        "TopK",
-        "Transpose",
-        "Unsqueeze",
-        "Where",
-    }
-)
+BENCHMARK_ONNX_OPSET = 17
+
+
+_OPSET1_MOBILE_CNN = {
+    "Add",
+    "AveragePool",
+    "Constant",
+    "Conv",
+    "Flatten",
+    "Gemm",
+    "GlobalAveragePool",
+    "Relu",
+    "Reshape",
+}
+
+_OPSET2_DETECTION_VISION = _OPSET1_MOBILE_CNN | {
+    "Concat",
+    "MaxPool",
+    "Mul",
+    "Pad",
+    "Resize",
+    "Sigmoid",
+    "Slice",
+    "Split",
+    "Transpose",
+}
+
+_OPSET3_HYBRID_TRANSFORMER = _OPSET2_DETECTION_VISION | {
+    "Div",
+    "Erf",
+    "Gather",
+    "Gelu",
+    "MatMul",
+    "ReduceMean",
+    "Shape",
+    "Softmax",
+    "Sqrt",
+    "Squeeze",
+    "Sub",
+    "Unsqueeze",
+}
+
+_OPSET4_DECODER_CORE = _OPSET3_HYBRID_TRANSFORMER | {
+    "Cast",
+    "Cos",
+    "Equal",
+    "Expand",
+    "Neg",
+    "Pow",
+    "Sin",
+    "Tanh",
+    "Where",
+}
+
+_OPSET5_FULL_BENCHMARK = _OPSET4_DECODER_CORE | {
+    "ConstantOfShape",
+    "GatherElements",
+    "HardSigmoid",
+    "HardSwish",
+    "IsNaN",
+    "LeakyRelu",
+    "Less",
+    "LessOrEqual",
+    "Max",
+    "Min",
+    "Mod",
+    "Range",
+    "ReduceMax",
+    "ReduceSum",
+    "Tile",
+    "TopK",
+}
+
+
+LOGICAL_OPSETS: dict[str, frozenset[str]] = {
+    "opset1_mobile_cnn": frozenset(_OPSET1_MOBILE_CNN),
+    "opset2_detection_vision": frozenset(_OPSET2_DETECTION_VISION),
+    "opset3_hybrid_transformer": frozenset(_OPSET3_HYBRID_TRANSFORMER),
+    "opset4_decoder_core": frozenset(_OPSET4_DECODER_CORE),
+    "opset5_full_benchmark": frozenset(_OPSET5_FULL_BENCHMARK),
+}
+
+SUPPORTED_OPS: frozenset[str] = LOGICAL_OPSETS["opset5_full_benchmark"]
 
 
 PRIORITY_MODELS: dict[str, Path] = {
-    "resnet18": Path("benchmarks/onnx/vision/resnet18.onnx"),
-    "bert_tiny": Path("benchmarks/onnx/nlp/bert_tiny/onnx/model.onnx"),
+    "mobilevit_xxs": Path("benchmarks/onnx/vision/mobilevit_xxs/onnx/model.onnx"),
+    "mobilenetv2": Path("benchmarks/onnx/vision/mobilenetv2/mobilenetv2-12.onnx"),
+    "yolo26_nano": Path("benchmarks/onnx/vision/yolo26_nano/onnx/model.onnx"),
     "tinyllama_15m": Path("benchmarks/onnx/nlp/tinyllama_15m/onnx/model.onnx"),
+    "pythia_70m": Path("benchmarks/onnx/nlp/pythia_70m/onnx/model.onnx"),
+    "smollm_135m": Path("benchmarks/onnx/nlp/smollm_135m/onnx/model.onnx"),
 }
 
-EXTENDED_BENCHMARK_MODELS: dict[str, Path] = {
-    # Tiny RoPE-based decoder model that fits the CPU budget better than distilbert.
-    # We keep it in the default priority set above once fetched locally.
-    # Larger modern LLM kept as a stretch target.
-    # Small RoPE-based decoder-only LLM with an explicit ONNX opset>=13 export.
-    "qwen3_0_6b": Path("benchmarks/onnx/nlp/qwen3_0_6b/model.onnx"),
-    # Latest Ultralytics YOLO family candidate. We export it locally to ONNX opset 17.
-    "yolo26_n": Path("benchmarks/onnx/vision/yolo26_n/model.onnx"),
-}
+EXTENDED_BENCHMARK_MODELS: dict[str, Path] = {}
 
 ALL_BENCHMARK_MODELS: dict[str, Path] = {
     **PRIORITY_MODELS,
     **EXTENDED_BENCHMARK_MODELS,
+}
+
+
+BENCHMARK_DOWNLOAD_SPECS: dict[str, dict[str, object]] = {
+    "mobilevit_xxs": {
+        "repo_id": "apple/mobilevit-xx-small",
+        "revision": "refs/pr/3",
+        "local_dir": Path("benchmarks/onnx/vision/mobilevit_xxs"),
+        "include": ("onnx/*", "config.json", "preprocessor_config.json"),
+    },
+    "mobilenetv2": {
+        "repo_id": "onnxmodelzoo/mobilenetv2-12",
+        "local_dir": Path("benchmarks/onnx/vision/mobilenetv2"),
+        "include": ("mobilenetv2-12.onnx",),
+    },
+    "yolo26_nano": {
+        "repo_id": "onnx-community/yolo26n-ONNX",
+        "local_dir": Path("benchmarks/onnx/vision/yolo26_nano"),
+        "include": ("onnx/model.onnx",),
+    },
+    "tinyllama_15m": {
+        "repo_id": "nickypro/tinyllama-15M-fp32",
+        "revision": "refs/pr/2",
+        "local_dir": Path("benchmarks/onnx/nlp/tinyllama_15m"),
+        "include": ("onnx/model.onnx", "onnx/model.onnx_data"),
+    },
+    "pythia_70m": {
+        "repo_id": "Xenova/pythia-70m",
+        "local_dir": Path("benchmarks/onnx/nlp/pythia_70m"),
+        "include": ("onnx/model.onnx", "onnx/model.onnx_data"),
+    },
+    "smollm_135m": {
+        "repo_id": "onnx-community/SmolLM-135M-ONNX",
+        "local_dir": Path("benchmarks/onnx/nlp/smollm_135m"),
+        "include": ("onnx/model.onnx", "onnx/model.onnx_data"),
+    },
 }
