@@ -51,22 +51,22 @@
 
 ## After Rewrite
 
-- total nodes: `663`
+- total nodes: `743`
 - strict unsupported ops:
   - `ConstantOfShape=4`
   - `Equal=2`
   - `Expand=2`
   - `Less=1`
   - `Range=1`
-  - `Shape=37`
-  - `Squeeze=2`
-  - `Unsqueeze=63`
+  - `Shape=42`
+  - `Unsqueeze=14`
   - `Where=5`
 
 해석:
 
-- 이번 턴의 핵심 진전은 shape-builder cleanup이다.
-- `Shape: 49 -> 37`, `Unsqueeze: 111 -> 63`으로 줄였지만, strict LLM legality까지는 아직 멀다.
+- 이번 턴의 핵심 진전은 shape-builder / meta-reshape cleanup이다.
+- `Unsqueeze: 111 -> 14`까지 줄였지만, strict LLM legality까지는 아직 멀다.
+- 대신 causal mask 경로의 `Shape / Where / Expand / ConstantOfShape` 비중이 더 또렷하게 남았다.
 
 ## Correctness
 

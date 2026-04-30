@@ -154,16 +154,18 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 현재 strict LLM triage:
 
 - `tinyllama_15m`
-  - `Shape: 49 -> 37`
-  - `Unsqueeze: 111 -> 63`
+  - correctness는 유지됨
+  - `Shape: 49 -> 42`
+  - `Unsqueeze: 111 -> 14`
   - 남은 핵심: `Range / Less / Where / Expand / ConstantOfShape`
 - `pythia_70m`
-  - `Shape: 27 -> 15`
-  - `Unsqueeze: 52 -> 27`
+  - correctness는 유지됨
+  - `Shape: 27 -> 22`
+  - `Unsqueeze: 52 -> 2`
   - 남은 핵심: exact `GELU`의 `Erf=6`, 그리고 `Range / Less / Where / Expand / ConstantOfShape`
 - `smollm_135m`
-  - `Shape: 127 -> 97`
-  - `Unsqueeze: 283 -> 223`
+  - `Shape: 127 -> 125`
+  - `Unsqueeze: 283 -> 5`
   - 남은 핵심: `Sin / Cos`, `Trilu`, `ScatterND`, 대량의 mask plumbing
 
 ### 2.3 모델별 완료 조건

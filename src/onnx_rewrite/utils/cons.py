@@ -27,6 +27,7 @@ OP_MIN = "Min"
 OP_MUL = "Mul"
 OP_NEG = "Neg"
 OP_PAD = "Pad"
+OP_RANGE = "Range"
 OP_RELU = "Relu"
 OP_RESHAPE = "Reshape"
 OP_REDUCE_MEAN = "ReduceMean"
@@ -80,6 +81,7 @@ __all__ = [
     "OP_MIN",
     "OP_MUL",
     "OP_PAD",
+    "OP_RANGE",
     "OP_REDUCE_MEAN",
     "OP_RELU",
     "OP_RESHAPE",

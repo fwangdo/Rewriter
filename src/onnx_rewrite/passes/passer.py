@@ -8,8 +8,10 @@ from .eliminate_id import EliminateId
 from .rewrite_bn import RewriteBN
 from .rewrite_clip import RewriteClip
 from .rewrite_compare import RewriteCompare
+from .rewrite_gather import RewriteGather
 from .rewrite_gemm import RewriteGemm
 from .rewrite_layernorm import RewriteLayerNorm
+from .rewrite_meta_reshape import RewriteMetaReshape
 from .rewrite_neg import RewriteNeg
 from .rewrite_pow import RewritePow
 from .rewrite_reshape_shape import RewriteReshapeShape
@@ -22,9 +24,12 @@ class Passer:
     def __init__(self) -> None:
         self.passes = [
             ConstantFolding(),
+            RewriteGather(),
+            ConstantFolding(),
             EliminateId(),
             RewriteClip(),
             RewriteCompare(),
+            RewriteMetaReshape(),
             RewriteReshapeShape(),
             RewriteLayerNorm(),
             RewriteBN(),
