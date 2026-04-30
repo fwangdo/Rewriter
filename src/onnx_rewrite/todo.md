@@ -12,6 +12,27 @@
 - 그 rewrite를 모두 적용한 결과를 `ONNX Runtime`에서 실행해 correctness / latency 검증
 - 입력 다양성을 확보한 validation harness로 baseline 수치를 신뢰할 수 있게 만들기
 
+현재 기준으로는 vision 3종 correctness는 이미 확보했고,
+남은 핵심은 LLM 3종을 같은 수준까지 끌어올리는 것이다.
+
+LLM 쪽 완료 기준은 반드시 `LLM_SUPPORTED_OPS` 기준 legality를 먼저 만족한 뒤 correctness를 통과하는 것이다.
+union scaffold 기준 correctness만 확보된 상태는 완료로 보지 않는다.
+
+## Current Progress
+
+- [x] `mobilenetv2` end-to-end correctness 확보
+- [x] `mobilevit_xxs` end-to-end correctness 확보
+- [x] `yolo26_nano` end-to-end correctness 확보
+- [x] vision용 `Clip` rewrite 추가
+- [x] vision용 `LayerNormalization` decomposition 추가
+- [x] vision pipeline에서 불필요한 `MatMul` lowering 제거
+- [x] `tinyllama_15m` union-contract correctness 확보
+- [x] `pythia_70m` union-contract correctness 확보
+- [x] LLM `Reshape` shape-builder cleanup 추가
+- [ ] `tinyllama_15m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
+- [ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
+- [ ] `smollm_135m` end-to-end correctness 확보
+
 ## Success Criteria
 
 아래 조건을 만족하면 1차 목표 달성으로 본다.
@@ -55,6 +76,21 @@
 - `correctness`
 - `latency`
 
+### 3. LLM contract는 의도적으로 빡빡해야 한다
+
+LLM target contract는 decoder dense math의 최소 primitive만 남기고,
+아래 항목들은 rewrite가 실제로 필요하도록 supported ops에서 제외한다.
+
+- `LayerNorm / RMSNorm`
+- `Pow`
+- `Sin / Cos`
+- `Range / Where / Expand`
+- `Unsqueeze / Squeeze / Shape`
+- `ConstantOfShape`
+- `Equal / Less / Neg`
+- `TopK`
+- `Trilu / ScatterND`
+
 ## Workstreams
 
 ## 1. Rule-Based Rewrite Completion
@@ -64,23 +100,27 @@
 ### 1.1 Core lowering / decomposition
 
 [ ] `BatchNormalization` 제거
-[ ] `Gemm` rewrite 정리
+[x] `Gemm` rewrite 정리
 [ ] `MatMul` rewrite 정리
 [ ] `Pow` rewrite 정리
 [ ] `Gather` rewrite 정리
-[ ] `Identity` elimination
-[ ] `Constant` folding
-[ ] `ConstantOfShape` folding
+[x] `Identity` elimination
+[x] `Constant` folding
+[x] `ConstantOfShape` folding
 [ ] `Shape`-driven trivial cleanup
+[x] common `Reshape` shape-builder cleanup
 
 ### 1.2 Senior-level baseline에 포함해야 할 well-known rewrite
 
 아래는 "있으면 좋은 것"이 아니라 baseline 강도를 위해 가능한 범위에서 반드시 검토해야 할 항목이다.
 
-[ ] `LayerNorm` 계열 분해 패턴 정리
+[x] `LayerNorm` 계열 분해 패턴 정리
 [ ] `RMSNorm` 계열 산술 정리
 [ ] `GELU` 패턴 정리
 [ ] `SwiGLU / SiLU` 계열 패턴 정리
+[ ] `RoPE` canonicalization
+[ ] causal mask construction rewrite
+[ ] KV-cache update / index-scatter canonicalization
 [ ] `Transpose + Reshape + Unsqueeze + Squeeze` cleanup
 [ ] 상수 broadcast / reshape chain 단순화
 [ ] attention mask 주변 `Cast / Equal / Where / Expand` 정리
@@ -91,7 +131,7 @@
 
 ### 1.3 Unsupported op triage
 
-[ ] 각 benchmark별 unsupported op histogram 다시 수집
+[x] 각 benchmark별 unsupported op histogram 다시 수집
 [ ] `rewrite로 제거할 op`와 `supported op에 남겨둘 op`를 명시적으로 구분
 [ ] 남는 blocker에 대해 `구현 예정 / 범위 밖 / benchmark 예외`로 상태 라벨 부여
 
@@ -101,15 +141,30 @@
 
 ### 2.1 Vision
 
-[ ] `mobilenetv2`를 `supported op only` baseline으로 먼저 안정화
-[ ] `mobilevit_xxs`에서 hybrid vision + attention 경로 안정화
-[ ] `yolo26_nano`에서 detection topology와 `Resize/Concat/Split` 경로 안정화
+[x] `mobilenetv2`를 `supported op only` baseline으로 먼저 안정화
+[x] `mobilevit_xxs`에서 hybrid vision + attention 경로 안정화
+[x] `yolo26_nano`에서 detection topology와 `Resize/Concat/Split` 경로 안정화
 
 ### 2.2 Decoder LLM
 
-[ ] `tinyllama_15m`에서 `RoPE + RMSNorm + rank-4 attention` 경로 안정화
-[ ] `pythia_70m`에서 `parallel attention + LayerNorm + GELU` 경로 안정화
-[ ] `smollm_135m`에서 `GQA` 경로 안정화
+[ ] `tinyllama_15m`에서 `RoPE + RMSNorm + rank-4 attention` 경로를 strict `LLM_SUPPORTED_OPS` 기준으로 안정화
+[ ] `pythia_70m`에서 `parallel attention + LayerNorm + GELU` 경로를 strict `LLM_SUPPORTED_OPS` 기준으로 안정화
+[ ] `smollm_135m`에서 `GQA` 경로를 strict `LLM_SUPPORTED_OPS` 기준으로 안정화
+
+현재 strict LLM triage:
+
+- `tinyllama_15m`
+  - `Shape: 49 -> 37`
+  - `Unsqueeze: 111 -> 63`
+  - 남은 핵심: `Range / Less / Where / Expand / ConstantOfShape`
+- `pythia_70m`
+  - `Shape: 27 -> 15`
+  - `Unsqueeze: 52 -> 27`
+  - 남은 핵심: exact `GELU`의 `Erf=6`, 그리고 `Range / Less / Where / Expand / ConstantOfShape`
+- `smollm_135m`
+  - `Shape: 127 -> 97`
+  - `Unsqueeze: 283 -> 223`
+  - 남은 핵심: `Sin / Cos`, `Trilu`, `ScatterND`, 대량의 mask plumbing
 
 ### 2.3 모델별 완료 조건
 
@@ -165,25 +220,25 @@
 
 ### 4.1 Runtime policy
 
-[ ] `ONNX Runtime CPU` 기준 고정
-[ ] warmup / repeat / median / p95 정책 고정
-[ ] benchmark 실행 시 thread / provider 설정 고정
-[ ] 원본과 rewritten 모델에 동일 입력 배치 적용
+[x] `ONNX Runtime CPU` 기준 고정
+[x] warmup / repeat / median / p95 정책 고정
+[x] benchmark 실행 시 thread / provider 설정 고정
+[x] 원본과 rewritten 모델에 동일 입력 배치 적용
 
 ### 4.2 Reporting
 
-[ ] 모델별 원본 latency 기록
-[ ] 모델별 rewritten latency 기록
-[ ] speedup / slowdown 비율 기록
-[ ] correctness와 latency를 한 표에서 같이 보이도록 정리
+[x] 모델별 원본 latency 기록
+[x] 모델별 rewritten latency 기록
+[x] speedup / slowdown 비율 기록
+[x] correctness와 latency를 한 표에서 같이 보이도록 정리
 
 ## 5. Reporting and Audit
 
 목표: "무엇이 되었고 무엇이 안 되었는지"를 benchmark 기준으로 바로 보이게 한다.
 
-[ ] benchmark별 unsupported op before/after 표 작성
-[ ] benchmark별 correctness 요약 표 작성
-[ ] benchmark별 latency 요약 표 작성
+[x] benchmark별 unsupported op before/after 표 작성
+[x] benchmark별 correctness 요약 표 작성
+[x] benchmark별 latency 요약 표 작성
 [ ] pass별 기여도 또는 대표 적용 사례 기록
 [ ] 아직 미지원인 op / 패턴 목록 정리
 
@@ -208,8 +263,15 @@
 
 지금 바로 해야 할 일은 아래다.
 
-[ ] 6개 benchmark에 대해 unsupported op audit를 최신 기준으로 다시 돌린다
+[x] 6개 benchmark에 대해 unsupported op audit를 최신 기준으로 다시 돌린다
 [ ] audit 결과를 기준으로 `rewrite must-have list`를 확정한다
-[ ] `mobilenetv2`를 첫 final-benchmark baseline-complete 모델로 만든다
-[ ] ORT correctness / latency harness를 다양한 입력 기준으로 고정한다
-[ ] 결과를 모델별 표로 남긴다
+[x] `mobilenetv2`를 첫 final-benchmark baseline-complete 모델로 만든다
+[x] ORT correctness / latency harness를 다양한 입력 기준으로 고정한다
+[x] 결과를 모델별 표로 남긴다
+
+현재 immediate next는 아래다.
+
+[ ] `tinyllama_15m` strict `LLM_SUPPORTED_OPS` unsupported op 감소
+[ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` unsupported op 감소
+[ ] `smollm_135m` strict `LLM_SUPPORTED_OPS` blocker 정리
+[ ] LLM contract 기준의 unsupported op triage와 rewrite 우선순위 확정

@@ -51,6 +51,7 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Softmax",
         "Sqrt",
         "Sub",
+        "Tanh",
         "Transpose",
     }
 )

@@ -7,9 +7,13 @@ from .constant_folding import ConstantFolding
 from .eliminate_id import EliminateId
 from .rewrite_bn import RewriteBN
 from .rewrite_clip import RewriteClip
+from .rewrite_compare import RewriteCompare
 from .rewrite_gemm import RewriteGemm
 from .rewrite_layernorm import RewriteLayerNorm
+from .rewrite_neg import RewriteNeg
 from .rewrite_pow import RewritePow
+from .rewrite_reshape_shape import RewriteReshapeShape
+from .rewrite_trilu import RewriteTrilu
 
 
 class Passer:
@@ -20,10 +24,14 @@ class Passer:
             ConstantFolding(),
             EliminateId(),
             RewriteClip(),
+            RewriteCompare(),
+            RewriteReshapeShape(),
             RewriteLayerNorm(),
             RewriteBN(),
+            RewriteNeg(),
             RewritePow(),
             RewriteGemm(),
+            RewriteTrilu(),
             Cleanup(),
         ]
 

@@ -16,6 +16,21 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 - benchmark coverage 관리는 아래 `logical opset` 5단계로 한다
 - `BatchNormalization`은 입력 benchmark에는 등장해도, 최종 target opset에는 포함하지 않는다
 
+## Current Status
+
+현재 상태는 아래와 같다.
+
+- vision 3종 `mobilenetv2`, `mobilevit_xxs`, `yolo26_nano`는 현재 baseline pipeline에서 ORT correctness를 통과했다
+- vision 쪽 baseline rewrite는 `Clip`, `LayerNormalization`, `Gemm` 처리가 들어가 있다
+- vision pipeline에서는 target contract가 허용하는 `MatMul`은 굳이 lowering하지 않는다
+- LLM 쪽에서는 `Reshape` shape-builder cleanup을 추가해 strict unsupported histogram을 줄이기 시작했다
+- 다음 우선순위는 LLM 3종에 대해 `LLM_SUPPORTED_OPS` 기준 legality와 correctness를 같이 확보하는 것이다
+
+중요:
+
+- LLM에서 "완료"의 의미는 `ops(rewritten_llm) ⊆ LLM_SUPPORTED_OPS`를 만족한 뒤 correctness를 통과하는 것이다
+- union scaffold 기준 correctness만 통과한 상태는 LLM baseline 완료로 보지 않는다
+
 ## Domain Contracts
 
 현재는 benchmark별 세부 contract보다, 먼저 아래 두 개의 실전형 domain contract를 더 중요하게 본다.
@@ -39,14 +54,28 @@ Sub, Transpose
 
 ```text
 Add, Cast, Concat, Div, Gather, MatMul, Mul, ReduceMean,
-Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
+Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Tanh, Transpose
 ```
 
 의도:
 
-- decoder block의 핵심 dense math만 남긴다
-- `RoPE`, mask shaping, index shaping 같은 주변 op는 가능한 한 rewrite / folding / compiler-side lowering 대상으로 본다
-- 그래서 `Sin`, `Cos`, `Range`, `Where`, `Expand`, `Unsqueeze`, `Shape`, `TopK`는 LLM target contract에서 제외한다
+- decoder block의 핵심 dense math와 최소한의 tensor layout op만 남긴다
+- `Tanh`는 GELU tanh approximation 계열을 위해 허용한다
+- `RoPE`, causal mask, shape/index plumbing, cache update 같은 주변 op는 가능한 한 rewrite / folding / compiler-side lowering 대상으로 본다
+- 그래서 `Sin`, `Cos`, `Pow`, `Range`, `Where`, `Expand`, `Unsqueeze`, `Squeeze`, `Shape`, `ConstantOfShape`, `Equal`, `Less`, `Neg`, `TopK`, `Trilu`, `ScatterND`는 LLM target contract에서 제외한다
+
+이 설정은 아래 rewrite들이 실제로 필요해지도록 일부러 빡빡하게 잡은 것이다.
+
+- `LayerNorm / RMSNorm decomposition`
+- `GELU / SiLU / SwiGLU decomposition`
+- `MatMul + bias canonicalization`
+- `QKV attention canonicalization`
+- `RoPE lowering / canonicalization`
+- `causal mask construction rewrite`
+- `shape / reshape / transpose plumbing cleanup`
+- `constant folding / propagation`
+- `Gather / embedding rewrite`
+- `KV-cache update / index-scatter canonicalization`
 
 현재 코드의 `SUPPORTED_OPS`는 여전히 scaffold용 union set이고,
 실전 목표 contract는 위 `VISION_SUPPORTED_OPS`와 `LLM_SUPPORTED_OPS`다.
@@ -69,7 +98,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `timm mobilevit_xxs` local export |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 18 |
 | 핵심 stress | Conv+BN, MatMul attention, LayerNorm 계열 산술, Reshape/Transpose 체인 |
 
 **선정 근거**: 가장 작은 모델이지만 vision과 transformer operator vocabulary가 한 graph에 같이 들어간다. MobileNet류의 convolutional block과 attention block이 동시에 있으므로 hybrid rewrite 경계면을 보기 좋다.
@@ -79,7 +108,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `torchvision mobilenet_v2` local export |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 18 |
 | 핵심 stress | depthwise Conv, residual Add, mobile CNN 최소 operator 집합 |
 
 **선정 근거**: benchmark 전체의 가장 단순한 mobile CNN baseline이다. 복잡한 transformer 연산 없이 `Conv` 중심 legalization과 latency baseline을 제공한다.
@@ -89,7 +118,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `onnx-community/yolo26n-ONNX` 또는 Ultralytics export mirror |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 18 |
 | 핵심 stress | Resize, Concat, Split, Sigmoid, detection head, 비선형 DAG |
 
 **선정 근거**: 분류 모델이 아닌 detection graph를 추가해 feature pyramid, branch/merge, head split을 검증한다. MobileNetV2와 MobileViT가 주지 못하는 detection topology coverage를 담당한다.
@@ -99,7 +128,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `nickypro/tinyllama-15M-fp32` ONNX export |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 14 |
 | 핵심 stress | rank-4 attention MatMul, RoPE (`Sin/Cos`), RMSNorm, SwiGLU |
 
 **선정 근거**: 가장 작은 decoder baseline이다. decoder-only LLM에서 처음 필요한 `RoPE`, 4D attention layout, causal path를 가장 낮은 비용으로 검증한다.
@@ -109,7 +138,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `Xenova/pythia-70m` ONNX export |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 14 |
 | 핵심 stress | GPT-NeoX 계열 parallel attention, LayerNorm, GELU |
 
 **선정 근거**: LLaMA 계열과 다른 decoder family를 넣어 architecture bias를 줄인다. TinyLlama가 `RoPE+RMSNorm`을 커버한다면, Pythia는 `parallel attention + LayerNorm + GELU` 조합을 커버한다.
@@ -119,7 +148,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
 | 항목 | 값 |
 |---|---|
 | 출처 | `onnx-community/SmolLM-135M-ONNX` |
-| 권장 artifact opset | 17 |
+| 실제 artifact opset | 14 |
 | 핵심 stress | GQA, decoder scaling, modern small-LLM graph topology |
 
 **선정 근거**: benchmark의 최종 modern decoder anchor다. TinyLlama와 Pythia가 각각 MHA 기반 baseline과 GPT-NeoX 계열 baseline을 준다면, SmolLM은 GQA가 들어간 최신 소형 decoder 경로를 담당한다.
@@ -231,10 +260,25 @@ Opset 4 + Min, Max, Range, ConstantOfShape, ReduceSum, ReduceMax,
 | 4. Decoder-Core | TinyLlama-15M, Pythia-70M | decoder 기본 경로 |
 | 5. Full-Benchmark | SmolLM-135M | 전체 benchmark contract |
 
+### Current LLM Progress Snapshot
+
+- `tinyllama_15m`
+  - correctness는 현재 pipeline에서 유지된다
+  - strict unsupported는 `Shape: 49 -> 37`, `Unsqueeze: 111 -> 63`까지 감소
+  - 남은 핵심은 causal mask subgraph
+- `pythia_70m`
+  - correctness는 현재 pipeline에서 유지된다
+  - strict unsupported는 `Shape: 27 -> 15`, `Unsqueeze: 52 -> 27`까지 감소
+  - 남은 핵심은 exact GELU의 `Erf`와 causal mask subgraph
+- `smollm_135m`
+  - 아직 strict legality / correctness 모두 미완료
+  - `RoPE`, `Trilu`, `ScatterND`, GQA mask plumbing이 남아 있다
+
 ---
 
 ## 구현 메모
 
 - benchmark model catalog와 logical opset의 코드 source-of-truth는 `src/onnx_rewrite/specs/catalog.py`에 둔다
-- `SUPPORTED_OPS`는 `Opset 5: Full-Benchmark`와 동일해야 한다
+- `VISION_SUPPORTED_OPS`와 `LLM_SUPPORTED_OPS`가 실전 target contract다
+- 현재 `SUPPORTED_OPS`는 migration 중인 scaffold용 union set이다
 - `BatchNormalization`은 benchmark 입력에서 허용되지만 rewrite 완료 graph에는 남아 있지 않아야 한다

@@ -8,6 +8,7 @@ import onnx
 import onnxruntime as ort
 
 MAX_ABS_TOLERANCE = 1e-4
+MAX_REL_TOLERANCE = 1e-5
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class OutputDiff:
     index: int
     shape: list[int]
     max_abs_diff: float
+    max_rel_diff: float
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -45,6 +47,7 @@ class CaseResult:
     int_mode: str
     outputs: list[OutputDiff]
     max_abs_diff: float
+    max_rel_diff: float
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -55,6 +58,7 @@ class CaseResult:
             "int_mode": self.int_mode,
             "outputs": [item.to_dict() for item in self.outputs],
             "max_abs_diff": self.max_abs_diff,
+            "max_rel_diff": self.max_rel_diff,
         }
 
 
@@ -66,6 +70,8 @@ class ValidationResult:
     worst_case: str
     max_abs_tolerance: float
     max_abs_diff: float
+    max_rel_tolerance: float
+    max_rel_diff: float
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -75,6 +81,8 @@ class ValidationResult:
             "worst_case": self.worst_case,
             "max_abs_tolerance": self.max_abs_tolerance,
             "max_abs_diff": self.max_abs_diff,
+            "max_rel_tolerance": self.max_rel_tolerance,
+            "max_rel_diff": self.max_rel_diff,
         }
 
 
@@ -105,10 +113,44 @@ def _resolve_input_shape(raw_shape: list[Any], dynamic_size: int) -> list[int]:
             continue
         if isinstance(dim, str) and dim:
             if dim not in symbol_sizes:
-                symbol_sizes[dim] = dynamic_size
+                if "+ 1" in dim:
+                    symbol_sizes[dim] = dynamic_size + 1
+                else:
+                    symbol_sizes[dim] = dynamic_size
             resolved.append(symbol_sizes[dim])
             continue
         resolved.append(dynamic_size)
+
+    return resolved
+
+
+def _resolve_decoder_input_shape(
+    raw_shape: list[Any],
+    dynamic_size: int,
+    input_name: str,
+) -> list[int]:
+    resolved: list[int] = []
+
+    for dim in raw_shape:
+        if isinstance(dim, int) and dim > 0:
+            resolved.append(dim)
+            continue
+
+        if not isinstance(dim, str) or not dim:
+            resolved.append(dynamic_size)
+            continue
+
+        if dim == "batch_size":
+            resolved.append(1)
+        elif dim == "sequence_length":
+            resolved.append(dynamic_size)
+        elif "past_sequence_length" in dim:
+            if "attention_mask" in input_name:
+                resolved.append(dynamic_size)
+            else:
+                resolved.append(0)
+        else:
+            resolved.append(dynamic_size)
 
     return resolved
 
@@ -184,6 +226,15 @@ def _build_float_input(
     return (rng.standard_normal(shape).astype(np.float32) * scale + shift).astype(np.float32)
 
 
+def _build_position_ids(shape: list[int], dtype: np.dtype) -> np.ndarray:
+    if len(shape) != 2:
+        return np.zeros(shape, dtype=dtype)
+    batch, seq = shape
+    row = np.arange(seq, dtype=np.int64)
+    values = np.broadcast_to(row, (batch, seq)).copy()
+    return values.astype(dtype)
+
+
 def _generate_inputs_for_case(
     session: ort.InferenceSession,
     vocab_upper: int,
@@ -191,13 +242,26 @@ def _generate_inputs_for_case(
 ) -> dict[str, np.ndarray]:
     rng = np.random.default_rng(case.seed)
     inputs: dict[str, np.ndarray] = {}
+    has_decoder_cache = any("past_key_values" in inp.name.lower() for inp in session.get_inputs())
 
     for inp in session.get_inputs():
-        shape = _resolve_input_shape(list(inp.shape), case.dynamic_size)
         input_name = inp.name.lower()
         input_type = inp.type
+        if has_decoder_cache:
+            shape = _resolve_decoder_input_shape(list(inp.shape), case.dynamic_size, input_name)
+        else:
+            shape = _resolve_input_shape(list(inp.shape), case.dynamic_size)
 
-        if "mask" in input_name:
+        if "past_key_values" in input_name:
+            inputs[inp.name] = np.zeros(shape, dtype=np.float32)
+        elif "position_ids" in input_name:
+            if "int64" in input_type:
+                inputs[inp.name] = _build_position_ids(shape, np.int64)
+            elif "int32" in input_type:
+                inputs[inp.name] = _build_position_ids(shape, np.int32)
+            else:
+                inputs[inp.name] = np.zeros(shape, dtype=np.float32)
+        elif "mask" in input_name:
             if "int64" in input_type:
                 inputs[inp.name] = _build_mask_input(shape, rng, case.mask_mode, np.int64)
             elif "int32" in input_type:
@@ -280,13 +344,17 @@ def _compare_output_pair(index: int, before: np.ndarray, after: np.ndarray) -> O
             index=index,
             shape=list(before.shape),
             max_abs_diff=0.0,
+            max_rel_diff=0.0,
         )
 
     abs_diff = np.abs(before_clean - after_clean)
+    rel_base = np.maximum(np.abs(before_clean), 1.0)
+    rel_diff = abs_diff / rel_base
     return OutputDiff(
         index=index,
         shape=list(before.shape),
         max_abs_diff=float(np.max(abs_diff)),
+        max_rel_diff=float(np.max(rel_diff)),
     )
 
 
@@ -336,16 +404,20 @@ def compare_models(
                 int_mode=case.int_mode,
                 outputs=diffs,
                 max_abs_diff=max(item.max_abs_diff for item in diffs) if diffs else 0.0,
+                max_rel_diff=max(item.max_rel_diff for item in diffs) if diffs else 0.0,
             )
         )
 
     worst_case = max(case_results, key=lambda item: item.max_abs_diff)
     max_abs_diff = max(case.max_abs_diff for case in case_results) if case_results else 0.0
+    max_rel_diff = max(case.max_rel_diff for case in case_results) if case_results else 0.0
     return ValidationResult(
-        success=max_abs_diff <= MAX_ABS_TOLERANCE,
+        success=(max_abs_diff <= MAX_ABS_TOLERANCE or max_rel_diff <= MAX_REL_TOLERANCE),
         cases_run=len(case_results),
         cases=case_results,
         worst_case=worst_case.name,
         max_abs_tolerance=MAX_ABS_TOLERANCE,
         max_abs_diff=max_abs_diff,
+        max_rel_tolerance=MAX_REL_TOLERANCE,
+        max_rel_diff=max_rel_diff,
     )

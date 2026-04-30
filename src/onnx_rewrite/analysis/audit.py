@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Iterable
 
 import onnx
 
@@ -27,22 +28,29 @@ class AuditSummary:
         return data
 
 
-def audit_model(model: onnx.ModelProto) -> AuditSummary:
+def audit_model(
+    model: onnx.ModelProto,
+    supported_ops: Iterable[str] | None = None,
+) -> AuditSummary:
+    supported = frozenset(supported_ops) if supported_ops is not None else SUPPORTED_OPS
     histogram = Counter(node.op_type for node in model.graph.node)
-    unsupported = {op: count for op, count in sorted(histogram.items()) if op not in SUPPORTED_OPS}
+    unsupported = {op: count for op, count in sorted(histogram.items()) if op not in supported}
     return AuditSummary(
         path="",
         total_nodes=sum(histogram.values()),
-        supported_ops=sorted(SUPPORTED_OPS),
+        supported_ops=sorted(supported),
         op_histogram=dict(sorted(histogram.items())),
         unsupported_histogram=unsupported,
     )
 
 
-def audit_path(path: str | Path) -> AuditSummary:
+def audit_path(
+    path: str | Path,
+    supported_ops: Iterable[str] | None = None,
+) -> AuditSummary:
     model_path = Path(path)
     model = onnx.load(str(model_path))
-    summary = audit_model(model)
+    summary = audit_model(model, supported_ops=supported_ops)
     return AuditSummary(
         path=str(model_path),
         total_nodes=summary.total_nodes,

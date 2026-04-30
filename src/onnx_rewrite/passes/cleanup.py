@@ -21,6 +21,39 @@ class Cleanup(Folder):
         super().__init__()
 
     @staticmethod
+    def _remove_dead_nodes(graph: onnx.GraphProto) -> int:
+        output_to_node: dict[str, onnx.NodeProto] = {}
+        for node in graph.node:
+            for output_name in node.output:
+                if output_name:
+                    output_to_node[output_name] = node
+
+        live_nodes: set[int] = set()
+        stack = [output.name for output in graph.output]
+
+        while stack:
+            value_name = stack.pop()
+            node = output_to_node.get(value_name)
+            if node is None:
+                continue
+            node_id = id(node)
+            if node_id in live_nodes:
+                continue
+            live_nodes.add(node_id)
+            for input_name in node.input:
+                if input_name:
+                    stack.append(input_name)
+
+        removed = 0
+        for node in list(graph.node):
+            if id(node) in live_nodes:
+                continue
+            graph.node.remove(node)
+            removed += 1
+
+        return removed
+
+    @staticmethod
     def _remove_unused_initializers(graph: onnx.GraphProto) -> int:
         """Remove initializers not referenced by any node or graph input.
 
@@ -116,6 +149,10 @@ class Cleanup(Folder):
         self.deleted_node = 0
         graph = model.graph
         log: list[str] = []
+
+        removed_nodes = self._remove_dead_nodes(graph)
+        if removed_nodes:
+            log.append(f"[Cleanup] removed {removed_nodes} dead nodes")
 
         removed = self._remove_unused_initializers(graph)
         if removed:

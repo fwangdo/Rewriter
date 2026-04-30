@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import onnx
 
@@ -79,12 +79,13 @@ def optimize_model(
     input_path: str | Path,
     output_path: str | Path,
     report_path: str | Path | None = None,
+    supported_ops: Iterable[str] | None = None,
 ) -> OptimizationResult:
     src = Path(input_path)
     dst = Path(output_path)
 
     model = load_model(src)
-    before = OpChecker.summarize(model, path=str(src))
+    before = OpChecker.summarize(model, path=str(src), supported_ops=supported_ops)
     logs: list[str] = []
 
     if before["unsupported_histogram"]:
@@ -103,7 +104,7 @@ def optimize_model(
         onnx.checker.check_model(model)
     except Exception as exc:
         logs.append(f"ONNX checker failed: {exc}")
-        failed_after = OpChecker.summarize(model, path=str(dst))
+        failed_after = OpChecker.summarize(model, path=str(dst), supported_ops=supported_ops)
         result = OptimizationResult(
             input_path=str(src),
             output_path=str(dst),
@@ -114,7 +115,7 @@ def optimize_model(
         _write_reports(result, report_path)
         raise
 
-    after = OpChecker.summarize(model, path=str(dst))
+    after = OpChecker.summarize(model, path=str(dst), supported_ops=supported_ops)
     if after["unsupported_histogram"]:
         detail = _format_histogram(after["unsupported_histogram"])
         logs.append(f"Output unsupported ops: {detail}")
