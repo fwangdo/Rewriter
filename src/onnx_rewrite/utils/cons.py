@@ -7,6 +7,7 @@ from ..specs import SUPPORTED_OPS
 OP_ADD = "Add"
 OP_AVERAGE_POOL = "AveragePool"
 OP_CAST = "Cast"
+OP_CLIP = "Clip"
 OP_CONCAT = "Concat"
 OP_CONV = "Conv"
 OP_SUB = "Sub"

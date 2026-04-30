@@ -1,127 +1,215 @@
 # ONNX Rewrite TODO
 
-## Final Goal
+## Current Goal
 
-현재 frontend scope는 `ai.onnx opset >= 13` 모델만 대상으로 한다.
+현재 목표는 `baseline 성능 확보`다.
 
-[ ] `resnet18`에 대해 `rewrite -> ORT 실행 -> correctness 검증 -> latency 비교` 완료
-[ ] `distilbert_base_uncased`에 대해 `rewrite -> ORT 실행 -> correctness 검증 -> latency 비교` 완료
-[ ] `bert_tiny`에 대해 `rewrite -> ORT 실행 -> correctness 검증 -> latency 비교` 완료
+여기서 baseline은 "약한 데모"가 아니라, **시니어 엔지니어라면 먼저 넣었을 법한 well-known rule-based rewrite를 충분히 갖춘 강한 baseline**을 뜻한다.
 
-## Priority
+즉 지금 해야 할 일은 아래 세 가지를 하나의 패키지로 끝내는 것이다.
 
-현재 가장 우선적인 목표는 `resnet18`과 `bert_tiny`의 rewrite completion이다.
+- benchmark 6종을 가능한 한 `supported op only` graph로 내리는 rule-based rewrite 구현
+- 그 rewrite를 모두 적용한 결과를 `ONNX Runtime`에서 실행해 correctness / latency 검증
+- 입력 다양성을 확보한 validation harness로 baseline 수치를 신뢰할 수 있게 만들기
 
-이 모델에서 먼저 아래를 끝내야 한다.
+## Success Criteria
 
-[x] rewrite pass가 실제로 graph를 바꾸도록 완성
-[ ] rewritten model이 ORT에서 실행 가능
-[ ] correctness check 통과
-[ ] latency 비교 report 생성
+아래 조건을 만족하면 1차 목표 달성으로 본다.
 
-그 다음에 같은 흐름을 `distilbert_base_uncased`, `bert_tiny`로 확장한다.
+- 6개 benchmark 모델에 대해 rewrite pipeline이 실행된다
+- 가능한 모델은 최종 graph가 `supported op only`를 만족한다
+- rewrite 후 모델이 `ONNX Runtime`에서 실제로 실행된다
+- 다양한 입력 샘플에 대해 원본과 rewritten 모델의 output 차이를 측정한다
+- 동일 입력군에 대해 원본과 rewritten 모델의 latency를 측정한다
+- 모델별로 `지원됨 / 미지원 blocker / correctness / latency` 상태가 report로 정리된다
 
-## Rewrite Targets
+## Benchmark Scope
 
-현재 op set과 benchmark audit 기준으로, 구현해야 할 rewrite 우선순위는 아래와 같다.
+현재 final benchmark는 아래 6종으로 고정한다.
 
-### Phase 1: CNN first
+- `mobilevit_xxs`
+- `mobilenetv2`
+- `yolo26_nano`
+- `tinyllama_15m`
+- `pythia_70m`
+- `smollm_135m`
 
-[x] `Gemm -> Conv` 또는 `Gemm -> MatMul + bias` 정리
+이 목록과 경로는 `specs/catalog.py`를 source-of-truth로 사용한다.
 
-`resnet18` 기준으로는 `Gemm`가 핵심 blocker다.
+## Baseline Principles
 
-### Phase 2: Transformer core
+### 1. Rewrite baseline은 강해야 한다
 
-[x] `MatMul -> Conv` 또는 supported op 조합
-[x] `Gather` rewrite 또는 support 전략 재판단
-[x] `Slice`는 supported op로 유지
-[ ] `Pow` rewrite 또는 support 전략 재판단
+아래 원칙으로 구현한다.
 
-### Phase 3: Secondary cleanup
+- "supported op만 남기기 위해 필요한 rewrite"는 적극적으로 넣는다
+- "이미 널리 알려진 표준적 decomposition / lowering / cleanup"은 빠뜨리지 않는다
+- benchmark에서 반복적으로 보이는 패턴은 예외 없이 pass로 흡수한다
+- 단, 실험적이거나 불안정한 heuristic보다 재현 가능한 정석 rewrite를 우선한다
 
+### 2. 평가 baseline도 강해야 한다
+
+수치 하나만 찍는 평가로 끝내지 않는다. 최소 검증 축은 아래 세 가지다.
+
+- `다양한 입력`
+- `correctness`
+- `latency`
+
+## Workstreams
+
+## 1. Rule-Based Rewrite Completion
+
+목표: benchmark 6종을 `supported op only`에 최대한 가깝게 내리는 강한 baseline rewrite를 갖춘다.
+
+### 1.1 Core lowering / decomposition
+
+[ ] `BatchNormalization` 제거
+[ ] `Gemm` rewrite 정리
+[ ] `MatMul` rewrite 정리
+[ ] `Pow` rewrite 정리
+[ ] `Gather` rewrite 정리
+[ ] `Identity` elimination
 [ ] `Constant` folding
 [ ] `ConstantOfShape` folding
-[ ] `Identity` elimination
-[ ] `Not` rewrite
-[ ] `CumSum` rewrite 또는 support 전략 재판단
+[ ] `Shape`-driven trivial cleanup
 
-## RewriteMatmul Completion
+### 1.2 Senior-level baseline에 포함해야 할 well-known rewrite
 
-`passes/rewrite_matmul.py`에서 남아 있는 일:
+아래는 "있으면 좋은 것"이 아니라 baseline 강도를 위해 가능한 범위에서 반드시 검토해야 할 항목이다.
 
-[x] generated nodes를 실제 graph에 삽입
-[x] 기존 `MatMul` node 제거
-[ ] initializer / shape update 정리
-[ ] 2D / 3D / 4D 경로별 ORT 실행 검증
-[ ] dynamic path correctness 검증
-[x] 실패 케이스를 `log`에 남기고 pass 전체는 계속 진행
+[ ] `LayerNorm` 계열 분해 패턴 정리
+[ ] `RMSNorm` 계열 산술 정리
+[ ] `GELU` 패턴 정리
+[ ] `SwiGLU / SiLU` 계열 패턴 정리
+[ ] `Transpose + Reshape + Unsqueeze + Squeeze` cleanup
+[ ] 상수 broadcast / reshape chain 단순화
+[ ] attention mask 주변 `Cast / Equal / Where / Expand` 정리
+[ ] redundant `Concat / Split / Slice` cleanup 가능성 점검
+[ ] `Resize` 주변 detection graph cleanup 가능성 점검
 
-## Current ONNX Understanding Notes
+중요한 기준은 "논문감 novelty"가 아니라, **benchmark를 supported-op contract 안으로 넣는 데 실질적으로 도움 되는가**다.
 
-현재 이해 수준은 "ONNX graph를 value-name 기반 DAG로 읽는 감각은 잡혀가고 있으나, op별 broadcasting / shape propagation / initializer와 runtime tensor의 구분은 계속 명시적 설명이 필요한 단계"로 본다.
+### 1.3 Unsupported op triage
 
-특히 아래는 이해가 빠르게 개선된 지점이다.
+[ ] 각 benchmark별 unsupported op histogram 다시 수집
+[ ] `rewrite로 제거할 op`와 `supported op에 남겨둘 op`를 명시적으로 구분
+[ ] 남는 blocker에 대해 `구현 예정 / 범위 밖 / benchmark 예외`로 상태 라벨 부여
 
-[x] `graph.input`과 `initializer`가 둘 다 node input으로 참조 가능한 tensor value라는 점 이해
-[x] node name과 tensor output name은 별도 namespace에 가깝고, 이름을 분리해야 디버깅이 쉬워진다는 점 이해
-[x] `Unsqueeze`의 axes 입력은 스칼라가 아니라 int64 tensor/list 형태라는 점 이해
-[x] `Gather(data, indices)`에서 `indices`는 보통 token 하나가 아니라 `[B, S]` 같은 sequence tensor일 수 있다는 점 이해
-[x] `Equal(indices, scalar_vocab_id)`는 scalar를 indices shape로 broadcast해서 mask를 만든다는 점 이해
-[x] `Unsqueeze(-1)`는 mask를 embedding row와 곱하기 위한 broadcast 축을 추가한다는 점 이해
-[x] chunked gather는 `[B, S, C, H]` 중간 표현을 만들고 chunk axis를 줄여 `[B, S, H]`로 복원한다는 점 이해
-[x] `ReduceMean * C`보다 `ReduceSum`이 직접적이고 현재 supported op set에 더 맞는 방식이라는 점 이해
-[x] dynamic-data Gather는 `one-hot-like mask -> MatMul -> Reshape`로 표현할 수 있고, 뒤에서 `RewriteMatmul`이 다시 lowering할 수 있다는 점 이해
+## 2. Benchmark-by-Benchmark Execution
 
-앞으로 설명할 때는 아래 관점으로 설명하는 것이 좋다.
+목표: rewrite 개발을 abstract하게 하지 말고, 6개 benchmark를 기준으로 밀어붙인다.
 
-[ ] ONNX node 설명은 항상 `input tensor names -> output tensor names`로 먼저 풀기
-[ ] 각 rewrite는 중간 tensor shape를 단계별로 써서 설명하기
-[ ] broadcasting이 일어나는 정확한 op와 shape pair를 반드시 명시하기
-[ ] initializer 기반 static rewrite와 runtime tensor 기반 dynamic rewrite를 매번 구분하기
-[ ] `axis`가 의미하는 차원을 concrete example로 먼저 고정하고 일반화하기
-[ ] `Shape`, `Gather`, `Slice`, `Reshape` 같은 shape-manipulation op는 값 계산과 shape 계산을 분리해 설명하기
-[ ] `MatMul -> Conv` lowering은 layout 변환과 수학적 동치성을 따로 설명하기
-[ ] pass 순서가 왜 중요한지, 특히 `Gather -> MatMul -> RewriteMatmul` 같은 chained rewrite는 pipeline 관점으로 설명하기
-[ ] supported op에 넣는 결정과 rewrite로 제거하는 결정의 차이를 "현실성 / graph blow-up / 구현 난이도" 축으로 설명하기
-[ ] 검증 설명은 먼저 structural check, 그다음 ORT execution, 마지막 correctness metric 순서로 설명하기
+### 2.1 Vision
 
-## Validation / Eval
+[ ] `mobilenetv2`를 `supported op only` baseline으로 먼저 안정화
+[ ] `mobilevit_xxs`에서 hybrid vision + attention 경로 안정화
+[ ] `yolo26_nano`에서 detection topology와 `Resize/Concat/Split` 경로 안정화
 
-rewrite 후 평가는 아래 기준으로 수행한다.
+### 2.2 Decoder LLM
 
-[ ] runtime: ONNX Runtime
-[ ] correctness: original vs rewritten output 비교
-[ ] latency: original vs rewritten latency 비교
+[ ] `tinyllama_15m`에서 `RoPE + RMSNorm + rank-4 attention` 경로 안정화
+[ ] `pythia_70m`에서 `parallel attention + LayerNorm + GELU` 경로 안정화
+[ ] `smollm_135m`에서 `GQA` 경로 안정화
 
-현재는 generic synthetic input 기반이므로, 모델군별 입력 정책도 필요하다.
+### 2.3 모델별 완료 조건
 
-[ ] CNN: image-shaped float input
-[ ] NLP: token / mask / segment input policy
+각 모델은 아래 순서로 본다.
 
-## Additional Benchmark Expansion
+[ ] unsupported op audit
+[ ] rewrite 적용
+[ ] rewritten graph structural sanity check
+[ ] ORT 실행 성공
+[ ] correctness 측정
+[ ] latency 측정
+[ ] 결과 report 반영
 
-`opset >= 13` 추가 benchmark를 통해 아래 후속 과제가 확인됐다.
+## 3. Validation Harness
 
-[ ] `distilbert_base_uncased_mnli`를 추가 benchmark 후보로 등록하고 기존 `distilbert`와 함께 NLP drift / latency 경향 비교
-[ ] `vit_tiny_patch16_224`를 추가 benchmark 후보로 등록하고 ViT 계열의 rewrite correctness / latency 경향 확인
-[ ] `vit_base_patch16_224`를 추가 benchmark 후보로 등록하고 model size 증가 시 graph blow-up 영향 비교
-[ ] vision transformer 입력용 `pixel_values` 생성 규칙을 validation harness에 추가
-[ ] vision 입력 기본 shape를 `(N, 3, H, W)`로 다루도록 `runtime/validation.py` 보강
-[ ] `dinov3_convnext_tiny`를 modern ONNX stress benchmark로 유지
-[ ] `LayerNormalization` rewrite 구현
-[ ] `CastLike` rewrite 또는 support 전략 결정
-[ ] `Loop` 지원 여부 결정 또는 benchmark scope에서 제외할 기준 정리
-[ ] `SequenceEmpty` 포함 sequence 계열 op 지원 여부 결정
-[ ] modern ONNX benchmark에 대해 "현재 rewrite 범위 밖"과 "우선 구현 대상"을 구분한 문서화
+목표: "rewrite가 돌아갔다"가 아니라, "다양한 입력에서도 원본과 비슷하게 동작한다"를 확인한다.
 
-## Done Criteria
+### 3.1 Input diversity
 
-`resnet18`가 아래를 만족하면 1차 목표 달성으로 본다.
+[ ] 모델군별 입력 생성 정책 문서화
+[ ] 같은 shape 안에서도 여러 랜덤 seed를 지원
+[ ] 입력 분포를 최소 2종 이상 지원
+[ ] edge-case 성격의 입력도 일부 포함
 
-[ ] rewrite 성공
-[ ] rewritten ONNX가 ORT에서 실행됨
-[ ] correctness metric 통과
-[ ] latency report 생성됨
+### 3.2 Vision input policy
 
-최종적으로는 3개 모델 전부가 위 조건을 만족해야 한다.
+[ ] 기본 image tensor shape 정책 정리
+[ ] random normal / uniform / bounded positive 입력 비교
+[ ] zero-heavy / near-constant 입력 추가
+[ ] detection 모델용 shape 정책 정리
+
+### 3.3 NLP input policy
+
+[ ] token id 생성 범위 정책 정리
+[ ] sequence length 다양화
+[ ] attention mask 다양화
+[ ] decoder prompt length 다양화
+[ ] pathological token pattern 반복 입력 추가
+
+### 3.4 Correctness metrics
+
+[ ] `max abs diff` 측정
+[ ] `mean abs diff` 측정
+[ ] `relative error` 또는 분모 안정화된 비율 지표 검토
+[ ] output tensor가 여러 개인 모델의 집계 방식 정의
+[ ] 모델별 허용 tolerance 기준 정리
+
+핵심은 "한 번 맞았다"가 아니라, **입력군 전반에서 얼마나 안정적으로 같은 출력을 내는가**다.
+
+## 4. Latency Measurement
+
+목표: rewrite의 품질을 ORT latency로 정량화한다.
+
+### 4.1 Runtime policy
+
+[ ] `ONNX Runtime CPU` 기준 고정
+[ ] warmup / repeat / median / p95 정책 고정
+[ ] benchmark 실행 시 thread / provider 설정 고정
+[ ] 원본과 rewritten 모델에 동일 입력 배치 적용
+
+### 4.2 Reporting
+
+[ ] 모델별 원본 latency 기록
+[ ] 모델별 rewritten latency 기록
+[ ] speedup / slowdown 비율 기록
+[ ] correctness와 latency를 한 표에서 같이 보이도록 정리
+
+## 5. Reporting and Audit
+
+목표: "무엇이 되었고 무엇이 안 되었는지"를 benchmark 기준으로 바로 보이게 한다.
+
+[ ] benchmark별 unsupported op before/after 표 작성
+[ ] benchmark별 correctness 요약 표 작성
+[ ] benchmark별 latency 요약 표 작성
+[ ] pass별 기여도 또는 대표 적용 사례 기록
+[ ] 아직 미지원인 op / 패턴 목록 정리
+
+## Recommended Execution Order
+
+아래 순서로 진행하는 것이 가장 현실적이다.
+
+1. `mobilenetv2`를 완전한 vision baseline으로 끝낸다
+2. `mobilevit_xxs`로 transformer 연산이 섞인 vision hybrid를 처리한다
+3. `yolo26_nano`로 detection topology를 처리한다
+4. `tinyllama_15m`로 decoder baseline을 연다
+5. `pythia_70m`로 decoder family 다양성을 확보한다
+6. `smollm_135m`로 GQA를 처리한다
+
+이 순서를 따르는 이유는 다음과 같다.
+
+- simplest vision -> complex vision -> detection -> decoder로 난이도가 점진적으로 올라간다
+- rewrite bug가 생겼을 때 어느 계층에서 깨졌는지 추적하기 쉽다
+- baseline latency report도 점진적으로 쌓을 수 있다
+
+## Immediate Next Tasks
+
+지금 바로 해야 할 일은 아래다.
+
+[ ] 6개 benchmark에 대해 unsupported op audit를 최신 기준으로 다시 돌린다
+[ ] audit 결과를 기준으로 `rewrite must-have list`를 확정한다
+[ ] `mobilenetv2`를 첫 final-benchmark baseline-complete 모델로 만든다
+[ ] ORT correctness / latency harness를 다양한 입력 기준으로 고정한다
+[ ] 결과를 모델별 표로 남긴다

@@ -6,8 +6,9 @@ from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
 from .eliminate_id import EliminateId
 from .rewrite_bn import RewriteBN
+from .rewrite_clip import RewriteClip
 from .rewrite_gemm import RewriteGemm
-from .rewrite_matmul import RewriteMatmul
+from .rewrite_layernorm import RewriteLayerNorm
 from .rewrite_pow import RewritePow
 
 
@@ -18,10 +19,11 @@ class Passer:
         self.passes = [
             ConstantFolding(),
             EliminateId(),
+            RewriteClip(),
+            RewriteLayerNorm(),
             RewriteBN(),
             RewritePow(),
             RewriteGemm(),
-            RewriteMatmul(),
             Cleanup(),
         ]
 

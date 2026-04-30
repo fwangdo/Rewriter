@@ -7,12 +7,49 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 
 - `ONNX export opset`: 모델 artifact를 만들 때 맞추는 ONNX spec version
 - `logical opset`: rewriter가 최종 graph에서 허용하는 operator 부분집합
+- `domain supported ops`: 실전 accelerator를 상정한 도메인별 contract
 
 이 문서의 기준은 다음과 같다.
 
 - benchmark artifact의 기본 export 기준은 `ai.onnx opset 17`
+- benchmark artifact의 최소 허용 기준은 `ai.onnx opset >= 13`
 - benchmark coverage 관리는 아래 `logical opset` 5단계로 한다
 - `BatchNormalization`은 입력 benchmark에는 등장해도, 최종 target opset에는 포함하지 않는다
+
+## Domain Contracts
+
+현재는 benchmark별 세부 contract보다, 먼저 아래 두 개의 실전형 domain contract를 더 중요하게 본다.
+
+### Vision Supported Ops
+
+```text
+Add, AveragePool, Cast, Concat, Conv, Div, GlobalAveragePool,
+HardSigmoid, HardSwish, MatMul, MaxPool, Mul, ReduceMean, Relu,
+Reshape, Resize, Sigmoid, Slice, Softmax, Split, Sqrt, Squeeze,
+Sub, Transpose
+```
+
+의도:
+
+- 모바일 CNN, hybrid vision, detection graph에서 실제로 기대할 수 있는 연산만 남긴다
+- `MatMul`, `Softmax`, `ReduceMean`은 MobileViT류 hybrid vision을 위해 허용한다
+- 반대로 `Erf`, `TopK`, `Range`, `Tile`, `GatherElements`, `IsNaN`, `Sin/Cos`, `Where`, `Expand`는 vision target에서 제외한다
+
+### LLM Supported Ops
+
+```text
+Add, Cast, Concat, Div, Gather, MatMul, Mul, ReduceMean,
+Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Transpose
+```
+
+의도:
+
+- decoder block의 핵심 dense math만 남긴다
+- `RoPE`, mask shaping, index shaping 같은 주변 op는 가능한 한 rewrite / folding / compiler-side lowering 대상으로 본다
+- 그래서 `Sin`, `Cos`, `Range`, `Where`, `Expand`, `Unsqueeze`, `Shape`, `TopK`는 LLM target contract에서 제외한다
+
+현재 코드의 `SUPPORTED_OPS`는 여전히 scaffold용 union set이고,
+실전 목표 contract는 위 `VISION_SUPPORTED_OPS`와 `LLM_SUPPORTED_OPS`다.
 
 ---
 
@@ -31,7 +68,7 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 
 | 항목 | 값 |
 |---|---|
-| 출처 | `apple/mobilevit-xx-small` ONNX export |
+| 출처 | `timm mobilevit_xxs` local export |
 | 권장 artifact opset | 17 |
 | 핵심 stress | Conv+BN, MatMul attention, LayerNorm 계열 산술, Reshape/Transpose 체인 |
 
@@ -41,8 +78,8 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 
 | 항목 | 값 |
 |---|---|
-| 출처 | `onnxmodelzoo/mobilenetv2-12` |
-| 권장 artifact opset | 17로 재수출 가능하면 통일, 원본 zoo artifact는 legacy opset 허용 |
+| 출처 | `torchvision mobilenet_v2` local export |
+| 권장 artifact opset | 17 |
 | 핵심 stress | depthwise Conv, residual Add, mobile CNN 최소 operator 집합 |
 
 **선정 근거**: benchmark 전체의 가장 단순한 mobile CNN baseline이다. 복잡한 transformer 연산 없이 `Conv` 중심 legalization과 latency baseline을 제공한다.
@@ -114,7 +151,9 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 ### 공통 ONNX export 기준
 
 - 기본 기준은 `ai.onnx opset 17`
+- 최소 허용 기준은 `ai.onnx opset >= 13`
 - 이미 검증된 공개 ONNX artifact가 있으면 그대로 사용 가능
+- 공개 artifact가 opset 13 미만이면 local re-export로 교체한다
 - 단, logical opset 평가는 ONNX spec version이 아니라 최종 op histogram으로 판단
 
 ### 왜 opset 17로 통일하는가

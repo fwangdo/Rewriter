@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 
-from front.onnx_rewrite.runtime.validation import build_inputs_for_model
+from src.onnx_rewrite.runtime.validation import build_inputs_for_model
 
 
 def parse_args() -> argparse.Namespace:

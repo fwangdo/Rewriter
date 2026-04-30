@@ -4,12 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
-from front.onnx_rewrite import (
+from src.onnx_rewrite import (
     UnsupportedOpError,
     audit_path,
     optimize_model,
 )
-from front.onnx_rewrite.utils.io import write_json
+from src.onnx_rewrite.utils.io import write_json
 
 
 def parse_args() -> argparse.Namespace:

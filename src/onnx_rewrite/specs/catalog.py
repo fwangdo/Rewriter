@@ -4,6 +4,95 @@ from pathlib import Path
 
 
 BENCHMARK_ONNX_OPSET = 17
+BENCHMARK_ONNX_MIN_OPSET = 13
+
+VISION_SUPPORTED_OPS: frozenset[str] = frozenset(
+    {
+        "Add",
+        "AveragePool",
+        "Cast",
+        "Concat",
+        "Conv",
+        "Div",
+        "GlobalAveragePool",
+        "HardSigmoid",
+        "HardSwish",
+        "MatMul",
+        "MaxPool",
+        "Mul",
+        "ReduceMean",
+        "Relu",
+        "Reshape",
+        "Resize",
+        "Sigmoid",
+        "Slice",
+        "Softmax",
+        "Split",
+        "Sqrt",
+        "Squeeze",
+        "Sub",
+        "Transpose",
+    }
+)
+
+LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
+    {
+        "Add",
+        "Cast",
+        "Concat",
+        "Div",
+        "Gather",
+        "MatMul",
+        "Mul",
+        "ReduceMean",
+        "Reshape",
+        "Sigmoid",
+        "Slice",
+        "Softmax",
+        "Sqrt",
+        "Sub",
+        "Transpose",
+    }
+)
+
+UNION_SUPPORTED_OPS: frozenset[str] = frozenset(
+    VISION_SUPPORTED_OPS
+    | LLM_SUPPORTED_OPS
+    | {
+        "Clip",
+        "Constant",
+        "ConstantOfShape",
+        "Cos",
+        "Equal",
+        "Erf",
+        "Expand",
+        "Flatten",
+        "GatherElements",
+        "Gelu",
+        "IsNaN",
+        "LeakyRelu",
+        "Less",
+        "LessOrEqual",
+        "Max",
+        "Min",
+        "Mod",
+        "Neg",
+        "Pad",
+        "Pow",
+        "Range",
+        "ReduceMax",
+        "ReduceSum",
+        "Shape",
+        "Sin",
+        "Tanh",
+        "Tile",
+        "TopK",
+        "Unsqueeze",
+        "Where",
+    }
+)
+
+SUPPORTED_OPS: frozenset[str] = UNION_SUPPORTED_OPS
 
 
 _OPSET1_MOBILE_CNN = {
@@ -85,12 +174,10 @@ LOGICAL_OPSETS: dict[str, frozenset[str]] = {
     "opset5_full_benchmark": frozenset(_OPSET5_FULL_BENCHMARK),
 }
 
-SUPPORTED_OPS: frozenset[str] = LOGICAL_OPSETS["opset5_full_benchmark"]
-
 
 PRIORITY_MODELS: dict[str, Path] = {
     "mobilevit_xxs": Path("benchmarks/onnx/vision/mobilevit_xxs/onnx/model.onnx"),
-    "mobilenetv2": Path("benchmarks/onnx/vision/mobilenetv2/mobilenetv2-12.onnx"),
+    "mobilenetv2": Path("benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx"),
     "yolo26_nano": Path("benchmarks/onnx/vision/yolo26_nano/onnx/model.onnx"),
     "tinyllama_15m": Path("benchmarks/onnx/nlp/tinyllama_15m/onnx/model.onnx"),
     "pythia_70m": Path("benchmarks/onnx/nlp/pythia_70m/onnx/model.onnx"),
