@@ -137,3 +137,8 @@ class EGraph:
     def set_analysis(self, cid: EClassId, data: AnalysisData) -> None:
         """Overwrite analysis data for an e-class."""
         self.eclass(cid).data = data
+
+    def update_analysis(self, cid: EClassId, data: AnalysisData) -> None:
+        """Join analysis data into an e-class without discarding prior facts."""
+        ec = self.eclass(cid)
+        ec.data = AnalysisData.join(ec.data, data)

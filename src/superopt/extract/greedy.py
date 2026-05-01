@@ -8,10 +8,8 @@ from __future__ import annotations
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
 from ..ir.graph import IRGraph
-from ..ir.node import IRNode, OP_INPUT, OP_NOOP, OP_WEIGHT
+from ..ir.node import IRNode
 from .cost import CostModel
-
-_LEAF_OPS = frozenset({OP_INPUT, OP_WEIGHT, OP_NOOP})
 
 
 def extract_greedy(
@@ -56,9 +54,14 @@ def extract_greedy(
 
         for enode in enodes:
             # Total cost = node cost + sum of children costs.
-            child_cost = sum(
-                best[egraph.find(c)][0] for c in enode.children if egraph.find(c) in best
-            )
+            child_cost = 0.0
+            for child in enode.children:
+                child_cid = egraph.find(child)
+                if child_cid not in best:
+                    raise ValueError(
+                        f"cannot extract e-class {cid}: child {child_cid} has no cost"
+                    )
+                child_cost += best[child_cid][0]
             total = cost_model.node_cost(enode) + child_cost
 
             if best_any is None or total < best_any[0]:
@@ -67,33 +70,13 @@ def extract_greedy(
                 if best_legal is None or total < best_legal[0]:
                     best_legal = (total, enode)
 
-        best[cid] = best_legal if best_legal is not None else best_any  # type: ignore[assignment]
+        chosen = best_legal if best_legal is not None else best_any
+        if chosen is None:
+            raise ValueError(f"cannot extract e-class {cid}: no e-nodes available")
+        best[cid] = chosen
 
     # Reconstruct IRGraph from chosen e-nodes.
     ir = IRGraph()
-    built: set[EClassId] = set()
-
-    def _build(cid: EClassId) -> str:
-        cid = egraph.find(cid)
-        if cid in built:
-            return _node_id(cid)
-        built.add(cid)
-
-        _, enode = best[cid]
-        # Build children first.
-        child_ids = tuple(_build(egraph.find(c)) for c in enode.children)
-
-        nid = _node_id(cid)
-        ec = egraph.eclass(cid)
-        ir.add_node(IRNode(
-            id=nid,
-            op=enode.op,
-            inputs=child_ids,
-            attrs=enode.attrs,
-            shape=ec.data.shape,
-            dtype=ec.data.dtype,
-        ))
-        return nid
 
     def _node_id(cid: EClassId) -> str:
         ec = egraph.eclass(cid)
@@ -101,6 +84,32 @@ def extract_greedy(
             return ec.data.preferred_name
         return f"_e{cid}"
 
-    root_id = _build(egraph.find(root_cid))
+    cid_to_node_id: dict[EClassId, str] = {}
+    for cid in reachable:
+        _, enode = best[cid]
+        child_ids: list[str] = []
+        for child in enode.children:
+            child_cid = egraph.find(child)
+            if child_cid not in cid_to_node_id:
+                raise ValueError(
+                    f"cannot build e-class {cid}: child {child_cid} was not built"
+                )
+            child_ids.append(cid_to_node_id[child_cid])
+
+        nid = _node_id(cid)
+        if nid in ir.nodes:
+            nid = f"{nid}__e{cid}"
+        ec = egraph.eclass(cid)
+        ir.add_node(IRNode(
+            id=nid,
+            op=enode.op,
+            inputs=tuple(child_ids),
+            attrs=enode.attrs,
+            shape=ec.data.shape,
+            dtype=ec.data.dtype,
+        ))
+        cid_to_node_id[cid] = nid
+
+    root_id = cid_to_node_id[egraph.find(root_cid)]
     ir.root = root_id
     return ir

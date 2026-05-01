@@ -13,10 +13,12 @@ from typing import Any
 
 import numpy as np
 import onnx
-from onnx import TensorProto, numpy_helper
+from onnx import TensorProto, helper, numpy_helper
 
 from .graph import IRGraph
-from .node import IRNode, OP_INPUT, OP_NOOP, OP_WEIGHT
+from .node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+
+_MULTI_OUTPUTS_ATTR = "__outputs"
 
 
 def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
@@ -32,6 +34,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     model = onnx.shape_inference.infer_shapes(model)
     graph = model.graph
     ir = IRGraph()
+    ir.inputs = tuple(inp.name for inp in graph.input if inp.name not in {init.name for init in graph.initializer})
+    ir.outputs = tuple(o.name for o in graph.output)
 
     # --- initializers ---
     init_names: set[str] = set()
@@ -62,17 +66,41 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
         ))
 
     # --- nodes ---
-    for node in graph.node:
+    for node_index, node in enumerate(graph.node):
         attrs = _extract_attrs(node)
-        # TODO: handle multi-output nodes with projection nodes
-        output_id = node.output[0]
-        shape = _get_value_info_shape(graph, output_id)
+        live_outputs = tuple(output for output in node.output if output)
+
+        if len(live_outputs) > 1:
+            base_id = node.name or f"{node.op_type}_{node_index}__multi"
+            while base_id in ir.nodes:
+                base_id = f"{base_id}_{node_index}"
+            base_attrs = dict(attrs)
+            base_attrs[_MULTI_OUTPUTS_ATTR] = live_outputs
+            ir.add_node(IRNode(
+                id=base_id,
+                op=node.op_type,
+                inputs=tuple(input_name for input_name in node.input if input_name),
+                attrs=tuple(sorted(base_attrs.items())),
+            ))
+            for output_index, output_id in enumerate(live_outputs):
+                ir.add_node(IRNode(
+                    id=output_id,
+                    op=OP_PROJ,
+                    inputs=(base_id,),
+                    attrs=(("index", output_index),),
+                    shape=_get_value_info_shape(graph, output_id),
+                    dtype=_get_value_info_dtype(graph, output_id),
+                ))
+            continue
+
+        output_id = live_outputs[0]
         ir.add_node(IRNode(
             id=output_id,
             op=node.op_type,
-            inputs=tuple(node.input),
+            inputs=tuple(input_name for input_name in node.input if input_name),
             attrs=tuple(sorted(attrs.items())),
-            shape=shape,
+            shape=_get_value_info_shape(graph, output_id),
+            dtype=_get_value_info_dtype(graph, output_id),
         ))
 
     # --- noop root ---
@@ -92,9 +120,8 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     """
     ref_graph = ref_model.graph
 
-    # Collect graph input and output specs from ref model.
-    graph_inputs = list(ref_graph.input)
-    graph_outputs = list(ref_graph.output)
+    graph_inputs = _graph_inputs_for_ir(ir, ref_graph)
+    graph_outputs = _graph_outputs_for_ir(ir, ref_graph)
 
     # Build initializers from IRGraph.
     initializers: list[TensorProto] = []
@@ -105,13 +132,16 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     nodes: list[onnx.NodeProto] = []
     for nid in ir.topo_order():
         node = ir.nodes[nid]
-        if node.op in (OP_INPUT, OP_WEIGHT, OP_NOOP):
+        if node.op in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ):
             continue
-        attrs = node.attrs_dict
+        attrs = dict(node.attrs_dict)
+        outputs = [node.id]
+        if _MULTI_OUTPUTS_ATTR in attrs:
+            outputs = list(attrs.pop(_MULTI_OUTPUTS_ATTR))
         onnx_node = onnx.helper.make_node(
             node.op,
             inputs=list(node.inputs),
-            outputs=[node.id],
+            outputs=outputs,
             **_attrs_to_kwargs(attrs),
         )
         nodes.append(onnx_node)
@@ -132,7 +162,29 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
         new_opset.domain = opset.domain
         new_opset.version = opset.version
 
-    onnx.checker.check_model(model)
+    try:
+        onnx.checker.check_model(model)
+    except Exception as exc:
+        produced = {output for node in nodes for output in node.output}
+        produced.update(init.name for init in initializers)
+        produced.update(inp.name for inp in graph_inputs)
+        missing_inputs = sorted(
+            {
+                input_name
+                for node in nodes
+                for input_name in node.input
+                if input_name and input_name not in produced
+            }
+        )
+        missing_outputs = sorted(
+            output.name for output in graph_outputs if output.name not in produced
+        )
+        raise ValueError(
+            "generated ONNX model failed checker; "
+            f"nodes={len(nodes)} initializers={len(initializers)} "
+            f"missing_inputs={missing_inputs[:10]} "
+            f"missing_outputs={missing_outputs[:10]}"
+        ) from exc
     return model
 
 
@@ -170,6 +222,63 @@ def _get_value_info_shape(
         if vi.name == name:
             return _extract_shape(vi)
     return None
+
+
+def _get_value_info_dtype(graph: onnx.GraphProto, name: str) -> int | None:
+    """Look up tensor dtype for a tensor name from graph metadata."""
+    for vi in list(graph.value_info) + list(graph.output) + list(graph.input):
+        if vi.name == name and vi.type.HasField("tensor_type"):
+            return int(vi.type.tensor_type.elem_type)
+    for init in graph.initializer:
+        if init.name == name:
+            return int(init.data_type)
+    return None
+
+
+def _graph_inputs_for_ir(
+    ir: IRGraph,
+    ref_graph: onnx.GraphProto,
+) -> list[onnx.ValueInfoProto]:
+    ref_inputs = {inp.name: inp for inp in ref_graph.input}
+    inputs: list[onnx.ValueInfoProto] = []
+    for name in ir.inputs:
+        if name not in ir.nodes or ir.nodes[name].op != OP_INPUT:
+            continue
+        if name in ref_inputs:
+            inputs.append(ref_inputs[name])
+        else:
+            node = ir.nodes[name]
+            inputs.append(_make_value_info(name, node.dtype, node.shape))
+    return inputs
+
+
+def _graph_outputs_for_ir(
+    ir: IRGraph,
+    ref_graph: onnx.GraphProto,
+) -> list[onnx.ValueInfoProto]:
+    ref_outputs = {output.name: output for output in ref_graph.output}
+    outputs: list[onnx.ValueInfoProto] = []
+    for name in ir.output_ids():
+        if name in ref_outputs:
+            outputs.append(ref_outputs[name])
+            continue
+        node = ir.nodes.get(name)
+        dtype = node.dtype if node is not None else None
+        shape = node.shape if node is not None else None
+        outputs.append(_make_value_info(name, dtype, shape))
+    return outputs
+
+
+def _make_value_info(
+    name: str,
+    dtype: int | None,
+    shape: tuple[int, ...] | None,
+) -> onnx.ValueInfoProto:
+    elem_type = dtype if dtype is not None else TensorProto.FLOAT
+    dims: list[int | str] | None = None
+    if shape is not None:
+        dims = [dim if dim >= 0 else f"unk_{index}" for index, dim in enumerate(shape)]
+    return helper.make_tensor_value_info(name, elem_type, dims)
 
 
 def _extract_attrs(node: onnx.NodeProto) -> dict[str, Any]:

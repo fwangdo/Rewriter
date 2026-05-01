@@ -38,8 +38,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--max-iter", type=int, default=15)
     parser.add_argument("--max-nodes", type=int, default=50_000)
     parser.add_argument(
-        "--correctness", action="store_true", default=True,
+        "--correctness",
+        dest="correctness",
+        action="store_true",
+        default=True,
         help="Run correctness check (default: true)",
+    )
+    parser.add_argument(
+        "--no-correctness",
+        dest="correctness",
+        action="store_false",
+        help="Skip correctness check",
     )
     parser.add_argument(
         "--latency", action="store_true", default=False,

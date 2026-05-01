@@ -20,7 +20,7 @@ from .extract.cost import CostModel
 from .extract.greedy import extract_greedy
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
-from .ir.node import OP_INPUT, OP_NOOP, OP_WEIGHT
+from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 from .rules.arithmetic import get_arithmetic_rules
 from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
@@ -56,8 +56,9 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
         cid = egraph.add(enode)
         node_to_cid[nid] = cid
 
-        # Propagate analysis data.
-        egraph.set_analysis(cid, AnalysisData(
+        # Propagate analysis data. add() may return an existing e-class, so
+        # join instead of overwriting facts from an equivalent node.
+        egraph.update_analysis(cid, AnalysisData(
             shape=node.shape,
             dtype=node.dtype,
             is_constant=(node.op == OP_WEIGHT),
@@ -80,15 +81,15 @@ def superoptimize(
     input_path = str(input_path)
     output_path = str(output_path)
 
-    # Load and shape-infer.
+    # Load model. onnx_to_ir performs shape inference once and keeps that
+    # responsibility localized to conversion.
     model = onnx.load(input_path)
-    model = onnx.shape_inference.infer_shapes(model)
 
     # ONNX → IR.
     ir = onnx_to_ir(model)
     original_nodes = sum(
         1 for n in ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP)
+        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
     # IR → e-graph.
@@ -109,10 +110,12 @@ def superoptimize(
     cost_model = CostModel(supported_ops)
     opt_ir = extract_greedy(egraph, root_cid, cost_model)
 
-    # Carry over initializers from original IR.
-    for name, arr in ir.initializers.items():
-        if name in opt_ir.nodes:
-            opt_ir.add_initializer(name, arr)
+    # Carry over only initializer leaves that survived extraction.
+    for name, node in opt_ir.nodes.items():
+        if node.op == OP_WEIGHT:
+            if name not in ir.initializers:
+                raise KeyError(f"missing initializer payload for extracted weight: {name}")
+            opt_ir.add_initializer(name, ir.initializers[name])
 
     # IR → ONNX.
     opt_model = ir_to_onnx(opt_ir, model)
@@ -120,13 +123,13 @@ def superoptimize(
 
     optimized_nodes = sum(
         1 for n in opt_ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP)
+        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
     # Check legality.
     unsupported = {
         n.op for n in opt_ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP)
+        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
         and n.op not in supported_ops
     }
     legality_ok = len(unsupported) == 0
