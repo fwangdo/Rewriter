@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only print audit result without running the pipeline.",
     )
+    parser.add_argument(
+        "--allow-unsupported",
+        action="store_true",
+        help="Save the rewritten graph even if unsupported ops remain.",
+    )
     return parser.parse_args()
 
 
@@ -53,7 +58,12 @@ def run_rewrite(args: argparse.Namespace):
     input_path = resolve_input_path(args)
     output_path = args.output or default_output_path(input_path)
     # here.  
-    return optimize_model(input_path, output_path, report_path=None)
+    return optimize_model(
+        input_path,
+        output_path,
+        report_path=None,
+        enforce_supported_only=not getattr(args, "allow_unsupported", False),
+    )
 
 
 def write_report_if_requested(result, report_path: Path | None) -> None:

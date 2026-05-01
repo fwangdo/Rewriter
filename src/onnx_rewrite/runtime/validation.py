@@ -381,6 +381,8 @@ def build_inputs_for_model(
 def compare_models(
     before_model_path: str,
     after_model_path: str,
+    max_abs_tolerance: float = MAX_ABS_TOLERANCE,
+    max_rel_tolerance: float = MAX_REL_TOLERANCE,
 ) -> ValidationResult:
     before_session = _make_session(before_model_path)
     after_session = _make_session(after_model_path)
@@ -421,12 +423,12 @@ def compare_models(
     max_abs_diff = max(case.max_abs_diff for case in case_results) if case_results else 0.0
     max_rel_diff = max(case.max_rel_diff for case in case_results) if case_results else 0.0
     return ValidationResult(
-        success=(max_abs_diff <= MAX_ABS_TOLERANCE or max_rel_diff <= MAX_REL_TOLERANCE),
+        success=(max_abs_diff <= max_abs_tolerance or max_rel_diff <= max_rel_tolerance),
         cases_run=len(case_results),
         cases=case_results,
         worst_case=worst_case.name,
-        max_abs_tolerance=MAX_ABS_TOLERANCE,
+        max_abs_tolerance=max_abs_tolerance,
         max_abs_diff=max_abs_diff,
-        max_rel_tolerance=MAX_REL_TOLERANCE,
+        max_rel_tolerance=max_rel_tolerance,
         max_rel_diff=max_rel_diff,
     )

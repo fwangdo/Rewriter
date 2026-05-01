@@ -80,6 +80,7 @@ def optimize_model(
     output_path: str | Path,
     report_path: str | Path | None = None,
     supported_ops: Iterable[str] | None = None,
+    enforce_supported_only: bool = True,
 ) -> OptimizationResult:
     src = Path(input_path)
     dst = Path(output_path)
@@ -119,17 +120,22 @@ def optimize_model(
     if after["unsupported_histogram"]:
         detail = _format_histogram(after["unsupported_histogram"])
         logs.append(f"Output unsupported ops: {detail}")
-        result = OptimizationResult(
-            input_path=str(src),
-            output_path=str(dst),
-            before=before,
-            after=after,
-            logs=logs,
-        )
-        _write_reports(result, report_path)
-        raise UnsupportedOpError(f"final graph is not supported-op-only: {detail}", result)
+        if enforce_supported_only:
+            result = OptimizationResult(
+                input_path=str(src),
+                output_path=str(dst),
+                before=before,
+                after=after,
+                logs=logs,
+            )
+            _write_reports(result, report_path)
+            raise UnsupportedOpError(f"final graph is not supported-op-only: {detail}", result)
+        logs.append("Output graph is not supported-op-only, but saving anyway")
 
-    logs.append("Output graph is supported-op-only")
+    if after["unsupported_histogram"]:
+        logs.append("Output graph is saved with unsupported ops for evaluation")
+    else:
+        logs.append("Output graph is supported-op-only")
     save_model(model, dst)
 
     result = OptimizationResult(

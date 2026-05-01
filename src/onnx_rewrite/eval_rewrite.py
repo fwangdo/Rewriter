@@ -72,6 +72,23 @@ def parse_args() -> argparse.Namespace:
         default=20,
         help="Measured iterations for latency measurement.",
     )
+    parser.add_argument(
+        "--max-abs-tolerance",
+        type=float,
+        default=1e-4,
+        help="Maximum absolute difference allowed during correctness comparison.",
+    )
+    parser.add_argument(
+        "--max-rel-tolerance",
+        type=float,
+        default=1e-5,
+        help="Maximum relative difference allowed during correctness comparison.",
+    )
+    parser.add_argument(
+        "--allow-unsupported",
+        action="store_true",
+        help="Allow rewrite output to keep unsupported ops and still run correctness.",
+    )
     return parser.parse_args()
 
 
@@ -80,8 +97,15 @@ def build_comparison(
     output_path: Path,
     warmup: int,
     repeat: int,
+    max_abs_tolerance: float,
+    max_rel_tolerance: float,
 ) -> ComparisonResult:
-    validation = compare_models(str(input_path), str(output_path))
+    validation = compare_models(
+        str(input_path),
+        str(output_path),
+        max_abs_tolerance=max_abs_tolerance,
+        max_rel_tolerance=max_rel_tolerance,
+    )
     ort_inputs = build_inputs_for_model(
         str(input_path),
         seed=42,
@@ -110,7 +134,14 @@ def run_eval(args: argparse.Namespace) -> EvalResult:
     optimization = run_rewrite(args)
     input_path = resolve_input_path(args)
     output_path = args.output or default_output_path(input_path)
-    comparison = build_comparison(input_path, output_path, args.warmup, args.repeat)
+    comparison = build_comparison(
+        input_path,
+        output_path,
+        args.warmup,
+        args.repeat,
+        args.max_abs_tolerance,
+        args.max_rel_tolerance,
+    )
     return EvalResult(optimization=optimization, comparison=comparison)
 
 
