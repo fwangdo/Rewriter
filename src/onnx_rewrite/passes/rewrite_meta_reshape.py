@@ -18,8 +18,6 @@ class RewriteMetaReshape(Folder):
             return dim
         if not isinstance(dim, str):
             return None
-        if dim == "batch_size":
-            return 1
         if "past_sequence_length" in dim and "+ 1" not in dim:
             return 0
         return None
