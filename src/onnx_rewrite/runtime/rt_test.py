@@ -4,9 +4,8 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import onnxruntime as ort
 
-from src.onnx_rewrite.runtime.validation import build_inputs_for_model
+from src.onnx_rewrite.runtime.validation import _make_session, build_inputs_for_model
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,7 +44,7 @@ def main() -> int:
     args = parse_args()
     model_path = args.input
 
-    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    session = _make_session(str(model_path))
     print(f"model={model_path}")
     print(f"providers={session.get_providers()}")
 

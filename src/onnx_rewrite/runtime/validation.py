@@ -86,6 +86,15 @@ class ValidationResult:
         }
 
 
+def _make_session(model_path: str, intra_op_threads: int = 1) -> ort.InferenceSession:
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = intra_op_threads
+    options.inter_op_num_threads = 1
+    options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    return ort.InferenceSession(model_path, sess_options=options, providers=["CPUExecutionProvider"])
+
+
 def _build_model_profile(model_path: str) -> ModelProfile:
     model = onnx.load(model_path)
     vocab_upper = 100
@@ -363,7 +372,7 @@ def build_inputs_for_model(
     seed: int = 42,
     dynamic_size: int = 1,
 ) -> dict[str, np.ndarray]:
-    session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+    session = _make_session(model_path)
     profile = _build_model_profile(model_path)
     case = VerificationCase("manual", seed, dynamic_size, "ones", "random_full")
     return _generate_inputs_for_case(session, profile.vocab_upper, case)
@@ -373,8 +382,8 @@ def compare_models(
     before_model_path: str,
     after_model_path: str,
 ) -> ValidationResult:
-    before_session = ort.InferenceSession(before_model_path, providers=["CPUExecutionProvider"])
-    after_session = ort.InferenceSession(after_model_path, providers=["CPUExecutionProvider"])
+    before_session = _make_session(before_model_path)
+    after_session = _make_session(after_model_path)
 
     profile = _build_model_profile(before_model_path)
     cases = _select_cases(profile)

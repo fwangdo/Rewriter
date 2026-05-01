@@ -60,6 +60,16 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. CPU Budget
+
+**Keep validation and benchmark work single-threaded by default.**
+
+- For ONNX Runtime sessions, default to `intra_op_num_threads=1` and `inter_op_num_threads=1`.
+- Prefer `ORT_SEQUENTIAL` when correctness or latency checks are running locally.
+- Do not fan out multiple benchmark or correctness runs in parallel unless the user explicitly asks for it.
+- Keep warmup and repeat counts as small as the task allows before scaling them up.
+- If a command is likely to spike CPU usage, call that out before running it.
+
 ---
 
 ## Preference in this project. 
