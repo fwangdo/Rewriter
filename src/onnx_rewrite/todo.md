@@ -28,7 +28,9 @@ union scaffold 기준 correctness만 확보된 상태는 완료로 보지 않는
 - [x] vision pipeline에서 불필요한 `MatMul` lowering 제거
 - [x] `tinyllama_15m` union-contract correctness 확보
 - [x] `pythia_70m` union-contract correctness 확보
+- [x] LLM `Gather` folding 추가
 - [x] LLM `Reshape` shape-builder cleanup 추가
+- [x] LLM 일부 `Unsqueeze/Squeeze -> Reshape` cleanup 추가
 - [ ] `tinyllama_15m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 - [ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 - [ ] `smollm_135m` end-to-end correctness 확보
@@ -103,7 +105,7 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 [x] `Gemm` rewrite 정리
 [ ] `MatMul` rewrite 정리
 [ ] `Pow` rewrite 정리
-[ ] `Gather` rewrite 정리
+[x] `Gather` rewrite 정리
 [x] `Identity` elimination
 [x] `Constant` folding
 [x] `ConstantOfShape` folding
@@ -157,7 +159,7 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
   - correctness는 유지됨
   - `Shape: 49 -> 42`
   - `Unsqueeze: 111 -> 14`
-  - 남은 핵심: `Range / Less / Where / Expand / ConstantOfShape`
+  - 남은 핵심: `Range / Less / Where / Expand / ConstantOfShape`, 그리고 dynamic shape query
 - `pythia_70m`
   - correctness는 유지됨
   - `Shape: 27 -> 22`
@@ -277,3 +279,39 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 [ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` unsupported op 감소
 [ ] `smollm_135m` strict `LLM_SUPPORTED_OPS` blocker 정리
 [ ] LLM contract 기준의 unsupported op triage와 rewrite 우선순위 확정
+
+## Stage 2: E-Graph Superoptimization
+
+baseline이 완료되면, 핵심 기여인 e-graph 기반 legalization-aware superoptimization으로 진입한다.
+
+### 핵심 아이디어
+
+- baseline rule-based rewrite와 **동일한 입력 그래프**에서 시작한다
+- equality saturation으로 동등 그래프 공간을 탐색한다
+- operator 제약(legality)과 성능 최적화를 **동시에** 탐색한다
+- baseline보다 유의미하게 더 좋은(더 빠르거나 더 작은) 동등 그래프를 찾는 것이 목표다
+
+### 선행 연구와의 차별점
+
+- **Tensat** (MLSys 2021): 고정 backend 가정, legalization 없이 optimization만 수행
+- **본 연구**: operator 제약이 변하는 환경에서 legalization + optimization 동시 수행
+- 즉 "어떤 op set이 주어져도 합법적이면서 최적인 그래프"를 찾는 문제
+
+### Roadmap
+
+[ ] e-graph 기반 ONNX rewrite framework 선정 또는 자체 구현 방향 결정
+[ ] rewrite rule을 e-graph equality rule로 인코딩
+[ ] operator legality를 cost function 또는 constraint로 모델링
+[ ] 단일 subgraph 단위 equality saturation 실험
+[ ] baseline 대비 latency 개선 측정
+[ ] benchmark 6종에 대해 baseline vs superopt 정량 비교
+[ ] 탐색 비용(시간, candidate 수) 측정 및 trade-off 분석
+
+### 평가 축
+
+| 항목 | 측정 방법 |
+|------|----------|
+| 성능 개선 | `latency(rule-based) / latency(superopt)` |
+| legalization 성공률 | 주어진 op set에서 합법 그래프 발견 여부 |
+| 탐색 비용 | superopt 수행 시간, e-graph 크기, candidate 수 |
+| 발견된 새 패턴 | rule-based에 없던 rewrite 패턴 자동 발견 여부 |
