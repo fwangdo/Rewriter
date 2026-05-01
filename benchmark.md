@@ -1,19 +1,18 @@
 # Benchmark 정의
 
 Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
-최종 benchmark 6종과 benchmark-driven logical opset을 정의한다.
+최종 benchmark 6종과 domain contract를 정의한다.
 
-여기서 "opset"은 두 층으로 나뉜다.
+여기서 "opset"은 artifact export 기준을 뜻하고,
+operator contract는 별도의 domain contract로 관리한다.
 
 - `ONNX export opset`: 모델 artifact를 만들 때 맞추는 ONNX spec version
-- `logical opset`: rewriter가 최종 graph에서 허용하는 operator 부분집합
 - `domain supported ops`: 실전 accelerator를 상정한 도메인별 contract
 
 이 문서의 기준은 다음과 같다.
 
 - benchmark artifact의 기본 export 기준은 `ai.onnx opset 17`
 - benchmark artifact의 최소 허용 기준은 `ai.onnx opset >= 13`
-- benchmark coverage 관리는 아래 `logical opset` 5단계로 한다
 - `BatchNormalization`은 입력 benchmark에는 등장해도, 최종 target opset에는 포함하지 않는다
 
 ## Current Status
@@ -23,7 +22,7 @@ Apple Silicon CPU + ONNX Runtime 환경에서 rewriter를 검증하기 위한
 - vision 3종 `mobilenetv2`, `mobilevit_xxs`, `yolo26_nano`는 현재 baseline pipeline에서 ORT correctness를 통과했다
 - vision 쪽 baseline rewrite는 `Clip`, `LayerNormalization`, `Gemm` 처리가 들어가 있다
 - vision pipeline에서는 target contract가 허용하는 `MatMul`은 굳이 lowering하지 않는다
-- LLM 쪽에서는 `Reshape` shape-builder cleanup을 추가해 strict unsupported histogram을 줄이기 시작했다
+- LLM 쪽에서는 `Gather` folding, `Reshape` shape-builder cleanup, 일부 meta-reshape cleanup, decoder mask lowering까지 추가했다
 - 다음 우선순위는 LLM 3종에 대해 `LLM_SUPPORTED_OPS` 기준 legality와 correctness를 같이 확보하는 것이다
 
 중요:
@@ -79,6 +78,24 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Tanh, Transpose
 
 현재 코드의 `SUPPORTED_OPS`는 여전히 scaffold용 union set이고,
 실전 목표 contract는 위 `VISION_SUPPORTED_OPS`와 `LLM_SUPPORTED_OPS`다.
+
+### Practical Note On Shape Ops
+
+실무 감각에서는 `Shape`류 메타 op를 보는 기준이 compute op와 조금 다르다.
+
+- 이상적으로는 `Shape`, `Gather(shape)`, `Unsqueeze`, `Squeeze`, `Concat`, `Reshape`도 최대한 줄이는 편이 맞다
+- 다만 이들은 종종 host-side shape engine이나 compile-time bookkeeping으로 처리되므로, 끝까지 남아도 "완전 실패"로 보지 않는 경우가 많다
+- 반대로 `Where`, `Range`, `Expand`, `ScatterND`, `Trilu`처럼 mask/cache 동적 생성에 직접 들어가는 op는 더 강하게 없애려는 편이 실무형 기준에 가깝다
+
+즉 현재 LLM contract는 연구용으로는 유용하지만 다소 공격적이다.
+실무형 해석으로는 아래 구분이 더 자연스럽다.
+
+- soft-allowed meta ops:
+  `Shape`, `Gather`, `Unsqueeze`, `Squeeze`, `Concat`, `Reshape`
+- must-remove ops:
+  `Where`, `Range`, `Expand`, `ScatterND`, `Trilu`, 그리고 가능하면 `Sin/Cos`
+
+이 구분은 코드에서는 `src/common/contracts.py`의 `LLM_META_OPS`, `LLM_MUST_REMOVE_OPS`로도 같이 관리한다.
 
 ---
 
@@ -183,7 +200,7 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Tanh, Transpose
 - 최소 허용 기준은 `ai.onnx opset >= 13`
 - 이미 검증된 공개 ONNX artifact가 있으면 그대로 사용 가능
 - 공개 artifact가 opset 13 미만이면 local re-export로 교체한다
-- 단, logical opset 평가는 ONNX spec version이 아니라 최종 op histogram으로 판단
+- contract 평가는 ONNX spec version이 아니라 최종 op histogram으로 판단한다
 
 ### 왜 opset 17로 통일하는가
 
@@ -191,94 +208,27 @@ Reshape, Sigmoid, Slice, Softmax, Sqrt, Sub, Tanh, Transpose
 2. modern ONNX exporter가 내놓는 shape/masking 패턴을 지나치게 오래된 opset으로 왜곡하지 않는다
 3. YOLO26와 최신 HF ONNX mirror들이 이미 이 근처 기준으로 관리되는 경우가 많다
 
----
-
-## Logical Opset 5단계
-
-`Constant`는 모든 단계에서 암묵적으로 허용한다고 본다. 아래 목록은 benchmark 분류에 의미 있는 차별 op만 적는다.
-
-### Opset 1: Mobile-CNN
-
-```
-Conv, Add, Relu, AveragePool, GlobalAveragePool, Flatten, Reshape, Gemm
-```
-
-**대상**: MobileNetV2 같은 순수 mobile CNN baseline
-
-**의미**: 가장 작은 분류형 vision contract다. depthwise Conv와 residual Add는 들어가지만 detection/transformer 구조는 없다.
-
-### Opset 2: Detection-Vision
-
-```
-Opset 1 + MaxPool, Mul, Sigmoid, Pad, Slice, Concat, Resize, Split, Transpose
-```
-
-**대상**: YOLO26-Nano
-
-**의미**: detection neck/head에서 필요한 branch/merge와 spatial resize를 추가한다. 이 단계부터 단순 직렬 CNN이 아니라 DAG 구조를 다룬다.
-
-### Opset 3: Hybrid-Transformer
-
-```
-Opset 2 + MatMul, Softmax, ReduceMean, Sub, Div, Sqrt, Shape,
-         Gather, Unsqueeze, Squeeze, Erf, Gelu
-```
-
-**대상**: MobileViT-XXS
-
-**의미**: vision benchmark 안에 transformer block이 섞이기 시작하는 단계다. attention과 LayerNorm 계열 산술이 처음 등장한다.
-
-### Opset 4: Decoder-Core
-
-```
-Opset 3 + Cast, Equal, Expand, Neg, Where, Sin, Cos, Tanh, Pow
-```
-
-**대상**: TinyLlama-15M, Pythia-70M
-
-**의미**: decoder-only LLM의 공통 기반이다. RoPE, RMSNorm/LayerNorm 파생 산술, causal masking을 포함한다.
-
-### Opset 5: Full-Benchmark
-
-```
-Opset 4 + Min, Max, Range, ConstantOfShape, ReduceSum, ReduceMax,
-         Less, LessOrEqual, Mod, TopK, Tile, GatherElements,
-         HardSigmoid, HardSwish, IsNaN, LeakyRelu
-```
-
-**대상**: SmolLM-135M까지 포함한 전체 benchmark contract
-
-**의미**: small modern LLM과 일부 mobile/exporter 잔여 op까지 포함한 최종 지원 집합이다. 현재 코드의 `SUPPORTED_OPS`는 이 단계를 기준으로 둔다.
-
-### Opset 계층 요약
-
-| Opset | 대표 모델 | 초점 |
-|---|---|---|
-| 1. Mobile-CNN | MobileNetV2 | 최소 mobile CNN |
-| 2. Detection-Vision | YOLO26-Nano | detection DAG |
-| 3. Hybrid-Transformer | MobileViT-XXS | vision + transformer 혼합 |
-| 4. Decoder-Core | TinyLlama-15M, Pythia-70M | decoder 기본 경로 |
-| 5. Full-Benchmark | SmolLM-135M | 전체 benchmark contract |
-
 ### Current LLM Progress Snapshot
 
 - `tinyllama_15m`
   - correctness는 현재 pipeline에서 유지된다
-  - strict unsupported는 `Shape: 49 -> 37`, `Unsqueeze: 111 -> 63`까지 감소
-  - 남은 핵심은 causal mask subgraph
+  - strict unsupported는 `Unsqueeze: 111 -> 14`까지 감소
+  - 남은 핵심은 causal mask subgraph와 그 주변의 동적 shape 조회다
 - `pythia_70m`
   - correctness는 현재 pipeline에서 유지된다
-  - strict unsupported는 `Shape: 27 -> 15`, `Unsqueeze: 52 -> 27`까지 감소
+  - strict unsupported는 `Unsqueeze: 52 -> 2`까지 감소
   - 남은 핵심은 exact GELU의 `Erf`와 causal mask subgraph
 - `smollm_135m`
   - 아직 strict legality / correctness 모두 미완료
   - `RoPE`, `Trilu`, `ScatterND`, GQA mask plumbing이 남아 있다
+  - `Unsqueeze`는 크게 줄었지만 `Where/Expand/Shape` 중심 blocker는 여전히 크다
 
 ---
 
 ## 구현 메모
 
-- benchmark model catalog와 logical opset의 코드 source-of-truth는 `src/onnx_rewrite/specs/catalog.py`에 둔다
+- benchmark model catalog는 `src/onnx_rewrite/specs/catalog.py`를 source-of-truth로 둔다
+- shared operator contract는 `src/common/contracts.py`를 source-of-truth로 둔다
 - `VISION_SUPPORTED_OPS`와 `LLM_SUPPORTED_OPS`가 실전 target contract다
 - 현재 `SUPPORTED_OPS`는 migration 중인 scaffold용 union set이다
 - `BatchNormalization`은 benchmark 입력에서 허용되지만 rewrite 완료 graph에는 남아 있지 않아야 한다

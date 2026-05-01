@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..specs import SUPPORTED_OPS
+from common.contracts import SUPPORTED_OPS
 
 
 # Supported ONNX ops in the current frontend contract.

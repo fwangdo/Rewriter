@@ -21,17 +21,17 @@
 - `pythia_70m` — GPT-NeoX style decoder (parallel attn + LayerNorm + GELU)
 - `smollm_135m` — modern decoder (GQA)
 
-모델 경로는 [specs/catalog.py](specs/catalog.py)의 `BENCHMARK_MODELS`에 정의되어 있다.
+모델 경로는 [specs/catalog.py](specs/catalog.py)에 정의되어 있다.
 
 ## Domain Contracts
 
 실전 target contract는 두 개다.
 
-- `VISION_SUPPORTED_OPS` (25 ops): vision 모델용
+- `VISION_SUPPORTED_OPS` (24 ops): vision 모델용
 - `LLM_SUPPORTED_OPS` (16 ops): decoder LLM용
 
 현재 `SUPPORTED_OPS`는 migration 중인 scaffold용 union set이다.
-자세한 정의는 [specs/catalog.py](specs/catalog.py) 참조.
+자세한 contract 정의는 [../common/contracts.py](../common/contracts.py) 참조.
 
 ## Directory Layout
 
