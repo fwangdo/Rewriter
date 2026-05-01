@@ -22,7 +22,8 @@ operator contract는 별도의 domain contract로 관리한다.
 - vision 3종 `mobilenetv2`, `mobilevit_xxs`, `yolo26_nano`는 현재 baseline pipeline에서 ORT correctness를 통과했다
 - vision 쪽 baseline rewrite는 `Clip`, `LayerNormalization`, `Gemm` 처리가 들어가 있다
 - vision pipeline에서는 target contract가 허용하는 `MatMul`은 굳이 lowering하지 않는다
-- LLM 쪽에서는 `Gather` folding, `Reshape` shape-builder cleanup, 일부 meta-reshape cleanup, decoder mask lowering까지 추가했다
+- LLM 쪽에서는 `Gather` folding, `Reshape` shape-builder cleanup, 일부 meta-reshape cleanup, decoder mask lowering, `Range -> Slice(arange_table)` lowering까지 추가했다
+- practical 기준으로는 `tinyllama_15m`, `pythia_70m`가 현재 `LLM_MUST_REMOVE_OPS = 0`과 correctness를 동시에 만족한다
 - 다음 우선순위는 LLM 3종에 대해 `LLM_SUPPORTED_OPS` 기준 legality와 correctness를 같이 확보하는 것이다
 
 중요:

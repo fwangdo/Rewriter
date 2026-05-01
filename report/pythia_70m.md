@@ -42,6 +42,10 @@
   - `Neg -> Mul(-1)`
 - `RewritePow`
   - LayerNorm 경로의 `Pow(x, 2)`를 `Mul(x, x)`로 치환
+- `RewriteRange`
+  - `Range(0, limit, 1)`를 precomputed arange table + dynamic `Slice`로 치환
+- `RewriteDecoderMask`
+  - GPT-NeoX 계열의 `Where + Expand` attention mask 경로를 arithmetic broadcast mask로 치환
 - `Cleanup`
   - dead node 제거
   - unused initializer 제거
@@ -50,24 +54,23 @@
 
 ## After Rewrite
 
-- total nodes: `514`
+- total nodes: `564`
 - strict unsupported ops:
   - `ConstantOfShape=2`
-  - `Equal=2`
   - `Erf=6`
-  - `Expand=2`
   - `Less=1`
-  - `Range=1`
-  - `Shape=15`
-  - `Squeeze=2`
-  - `Unsqueeze=27`
-  - `Where=5`
+  - `Equal=2`
+  - `Shape=22`
+  - `Unsqueeze=2`
+- practical must-remove ops:
+  - none
 
 해석:
 
-- 이번 턴에서 `Shape: 27 -> 15`, `Unsqueeze: 52 -> 27`로 줄었다.
+- `Where / Expand / Range`는 제거되어 현재 `LLM_MUST_REMOVE_OPS`는 0이 됐다.
+- `Unsqueeze`는 `52 -> 2`까지 줄었다.
 - 다만 `Erf=6`이 그대로 남아 있어, strict legality는 아직 미완료다.
-- `tanh GELU` approximation도 시험했지만 현재 tolerance에서는 correctness drift가 커서 default pipeline에 채택하지 않았다.
+- strict contract의 남은 핵심은 exact `GELU`, `Shape`, `ConstantOfShape`, `Equal`, `Less`다.
 
 ## Correctness
 
@@ -85,6 +88,5 @@
 
 ## Conclusion
 
-- pythia의 남은 핵심 blocker는 두 개다.
-- exact GELU를 깨지 않으면서 `Erf`를 없애는 activation rewrite
-- `Range / Less / Where / Expand / ConstantOfShape`로 이어지는 mask rewrite
+- pythia는 practical 기준에서 1차 목표를 달성했다.
+- 다음 strict blocker는 exact `GELU`의 `Erf`와 shape/meta 축이다.

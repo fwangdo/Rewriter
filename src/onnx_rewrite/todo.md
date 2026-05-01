@@ -31,6 +31,10 @@ union scaffold 기준 correctness만 확보된 상태는 완료로 보지 않는
 - [x] LLM `Gather` folding 추가
 - [x] LLM `Reshape` shape-builder cleanup 추가
 - [x] LLM 일부 `Unsqueeze/Squeeze -> Reshape` cleanup 추가
+- [x] tiny decoder `Where/Expand` mask lowering 추가
+- [x] simple `Range(0, limit, 1) -> Slice(arange_table)` lowering 추가
+- [x] `tinyllama_15m` practical `LLM_MUST_REMOVE_OPS=0` + correctness 확보
+- [x] `pythia_70m` practical `LLM_MUST_REMOVE_OPS=0` + correctness 확보
 - [ ] `tinyllama_15m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 - [ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 - [ ] `smollm_135m` end-to-end correctness 확보
@@ -157,18 +161,20 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 
 - `tinyllama_15m`
   - correctness는 유지됨
-  - `Shape: 49 -> 42`
+  - `Shape: 49 -> 39`
   - `Unsqueeze: 111 -> 14`
-  - 남은 핵심: `Range / Less / Where / Expand / ConstantOfShape`, 그리고 dynamic shape query
+  - practical must-remove ops: none
+  - 남은 strict 핵심: `ConstantOfShape=2, Less=1, Shape=39`, 그리고 dynamic shape query
 - `pythia_70m`
   - correctness는 유지됨
   - `Shape: 27 -> 22`
   - `Unsqueeze: 52 -> 2`
-  - 남은 핵심: exact `GELU`의 `Erf=6`, 그리고 `Range / Less / Where / Expand / ConstantOfShape`
+  - practical must-remove ops: none
+  - 남은 strict 핵심: exact `GELU`의 `Erf=6`, 그리고 `ConstantOfShape / Equal / Less / Shape`
 - `smollm_135m`
   - `Shape: 127 -> 125`
   - `Unsqueeze: 283 -> 5`
-  - 남은 핵심: `Sin / Cos`, `Trilu`, `ScatterND`, 대량의 mask plumbing
+  - 남은 핵심: `Sin / Cos`, `Trilu`, `ScatterND`, 대량의 `Where / Expand` mask plumbing
 
 ### 2.3 모델별 완료 조건
 

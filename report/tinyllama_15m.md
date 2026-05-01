@@ -13,8 +13,6 @@
 - total nodes: `1152`
 - strict unsupported ops:
   - `ConstantOfShape=4`
-  - `Equal=2`
-  - `Expand=2`
   - `Less=1`
   - `Neg=12`
   - `Pow=13`
@@ -43,6 +41,8 @@
   - `Neg -> Mul(-1)`
 - `RewritePow`
   - norm 경로의 `Pow(x, 2)`를 `Mul(x, x)`로 치환
+- `RewriteRange`
+  - `Range(0, limit, 1)`를 precomputed arange table + dynamic `Slice`로 치환
 - `Cleanup`
   - dead node 제거
   - unused initializer 제거
@@ -51,22 +51,21 @@
 
 ## After Rewrite
 
-- total nodes: `743`
+- total nodes: `721`
 - strict unsupported ops:
-  - `ConstantOfShape=4`
-  - `Equal=2`
-  - `Expand=2`
+  - `ConstantOfShape=2`
   - `Less=1`
-  - `Range=1`
-  - `Shape=42`
+  - `Shape=39`
   - `Unsqueeze=14`
-  - `Where=5`
+- practical must-remove ops:
+  - none
 
 해석:
 
 - 이번 턴의 핵심 진전은 shape-builder / meta-reshape cleanup이다.
-- `Unsqueeze: 111 -> 14`까지 줄였지만, strict LLM legality까지는 아직 멀다.
-- 대신 causal mask 경로의 `Shape / Where / Expand / ConstantOfShape` 비중이 더 또렷하게 남았다.
+- `Unsqueeze: 111 -> 14`까지 줄였고, `Range`도 제거됐다.
+- decoder mask rewrite와 range lowering으로 현재 `LLM_MUST_REMOVE_OPS`는 0이 됐다.
+- 대신 strict LLM legality 기준에서는 `ConstantOfShape / Less / Shape / Unsqueeze`가 여전히 남는다.
 
 ## Correctness
 
@@ -84,5 +83,5 @@
 
 ## Conclusion
 
-- tinyllama는 산술 축은 정리됐고, 이제 남은 핵심은 `Range / Less / Where / Expand / ConstantOfShape`로 이어지는 causal mask subgraph다.
-- 다음 단계는 이 마스크 경로를 표준적인 decoder mask rewrite로 정리하는 것이다.
+- tinyllama는 practical 기준에서 1차 목표를 달성했다.
+- 다음 단계는 strict contract에서 남는 `ConstantOfShape / Less / Shape / Unsqueeze`를 어떻게 다룰지 정하는 것이다.

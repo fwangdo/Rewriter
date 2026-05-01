@@ -26,6 +26,8 @@
   `Neg`를 `Mul(-1)`로 내린다.
 - `RewritePow`
   scalar constant exponent를 `Mul`, `Sqrt`, `Div` 조합으로 내린다.
+- `RewriteRange`
+  simple `Range(0, limit, 1)`를 precomputed arange table + dynamic `Slice`로 내린다.
 - `RewriteGemm`
   `Gemm`을 `Conv` 기반 1x1 lowering으로 바꾼다.
 - `Cleanup`

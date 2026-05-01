@@ -8,14 +8,17 @@ from .eliminate_id import EliminateId
 from .rewrite_bn import RewriteBN
 from .rewrite_clip import RewriteClip
 from .rewrite_compare import RewriteCompare
+from .rewrite_decoder_mask import RewriteDecoderMask
 from .rewrite_gather import RewriteGather
 from .rewrite_gemm import RewriteGemm
 from .rewrite_layernorm import RewriteLayerNorm
 from .rewrite_meta_reshape import RewriteMetaReshape
 from .rewrite_neg import RewriteNeg
 from .rewrite_pow import RewritePow
+from .rewrite_range import RewriteRange
 from .rewrite_reshape_shape import RewriteReshapeShape
 from .rewrite_trilu import RewriteTrilu
+from .rewrite_where_mask import RewriteWhereMask
 
 
 class Passer:
@@ -35,7 +38,10 @@ class Passer:
             RewriteBN(),
             RewriteNeg(),
             RewritePow(),
+            RewriteRange(),
             RewriteGemm(),
+            RewriteDecoderMask(),
+            RewriteWhereMask(),
             RewriteTrilu(),
             Cleanup(),
         ]
