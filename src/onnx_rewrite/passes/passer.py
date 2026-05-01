@@ -14,9 +14,9 @@ from .rewrite_gemm import RewriteGemm
 from .rewrite_layernorm import RewriteLayerNorm
 from .rewrite_meta_reshape import RewriteMetaReshape
 from .rewrite_neg import RewriteNeg
-from .rewrite_pow import RewritePow
 from .rewrite_range import RewriteRange
 from .rewrite_reshape_shape import RewriteReshapeShape
+from .rewrite_scatternd import RewriteScatterND
 from .rewrite_trilu import RewriteTrilu
 from .rewrite_where_mask import RewriteWhereMask
 
@@ -37,12 +37,13 @@ class Passer:
             RewriteLayerNorm(),
             RewriteBN(),
             RewriteNeg(),
-            RewritePow(),
             RewriteRange(),
             RewriteGemm(),
             RewriteDecoderMask(),
             RewriteWhereMask(),
             RewriteTrilu(),
+            RewriteScatterND(),
+            ConstantFolding(),
             Cleanup(),
         ]
 

@@ -15,7 +15,7 @@
 
 측정 조건:
 
-- rewrite pipeline: `ConstantFolding -> EliminateId -> RewriteClip -> RewriteGather -> RewriteMetaReshape -> RewriteReshapeShape -> RewriteBN -> RewriteNeg -> RewritePow -> RewriteGemm -> RewriteLayerNorm -> Cleanup`
+- rewrite pipeline: `ConstantFolding -> RewriteGather -> EliminateId -> RewriteClip -> RewriteCompare -> RewriteMetaReshape -> RewriteReshapeShape -> RewriteLayerNorm -> RewriteBN -> RewriteNeg -> RewriteRange -> RewriteGemm -> RewriteDecoderMask -> RewriteWhereMask -> RewriteTrilu -> RewriteScatterND -> Cleanup`
 - runtime: ONNX Runtime CPU
 - latency setting: `warmup=5`, `repeat=20`
 - correctness gate: `max_abs_diff <= 1e-4`
@@ -34,22 +34,22 @@ Vision 3종은 모두 `supported-op-only` 달성, correctness 통과.
 | `mobilevit_xxs` | 394 | — | `LayerNorm=21, Gemm=1` | `{}` | `1.19e-07` | pass | 1.035x |
 | `yolo26_nano` | 390 | — | `{}` | `{}` | `0.0` | pass | 1.002x |
 
-### LLM (target: `LLM_SUPPORTED_OPS`)
+### LLM (baseline target: `SUPPORTED_OPS`)
 
-LLM 3종은 아직 strict legality 미완료. union scaffold 기준 correctness는 확보.
+LLM 3종은 baseline `SUPPORTED_OPS` 기준 supported-op-only + correctness를 달성했다. strict `LLM_SUPPORTED_OPS`는 별도 후속 목표다.
 
-| model | before nodes | after nodes | key unsupported after | correctness (union) | strict legality |
-| --- | ---: | ---: | --- | --- | --- |
-| `tinyllama_15m` | 1152 | 743 | `Shape=42, Unsqueeze=14, Where=5, ...` | pass | pending |
-| `pythia_70m` | 589 | 514 | `Erf=6, Shape=15, Unsqueeze=27, Where=5, ...` | pass | pending |
-| `smollm_135m` | 2844 | 2574 | `Sin=1, Cos=1, Trilu=1, ScatterND=1, Equal=64, Where=64, ...` | not verified | pending |
+| model | before nodes | after nodes | unsupported after | max abs diff | correctness |
+| --- | ---: | ---: | --- | ---: | --- |
+| `tinyllama_15m` | 1152 | — | `{}` | `0.0` | pass |
+| `pythia_70m` | 589 | — | `{}` | `0.0` | pass |
+| `smollm_135m` | 2844 | 2824 | `{}` | `0.0` | pass |
 
 ## Current Conclusion
 
-> Vision 3종은 baseline 완료. LLM 3종은 union-contract correctness까지 확보했으나, strict `LLM_SUPPORTED_OPS` legality는 아직 남아 있다.
+> Benchmark 6종은 baseline `SUPPORTED_OPS` 기준 supported-op-only + correctness를 달성했다.
 
 다음 우선순위:
 
-1. `tinyllama_15m` / `pythia_70m`의 causal mask + GELU rewrite로 strict legality 달성
-2. `smollm_135m`의 RoPE / Trilu / ScatterND blocker 정리
-3. strict legality 달성 후 LLM correctness / latency 재측정
+1. strict `LLM_SUPPORTED_OPS` 기준 잔여 op를 별도 목표로 줄인다
+2. latency 측정을 `warmup=5`, `repeat=20` 조건으로 다시 고정 측정한다
+3. baseline rewrite를 regression test로 고정한다

@@ -82,9 +82,9 @@ max_abs_diff <= 1e-4
 
 ## Current Status
 
-Vision 3종(`mobilenetv2`, `mobilevit_xxs`, `yolo26_nano`)은 supported-op-only + correctness 달성.
+Benchmark 6종(`mobilenetv2`, `mobilevit_xxs`, `yolo26_nano`, `tinyllama_15m`, `pythia_70m`, `smollm_135m`)은 현재 `SUPPORTED_OPS` 기준 supported-op-only + correctness를 달성했다.
 
-LLM 3종(`tinyllama_15m`, `pythia_70m`, `smollm_135m`)은 union-contract correctness까지 확보. strict `LLM_SUPPORTED_OPS` legality는 진행 중.
+strict `LLM_SUPPORTED_OPS` legality는 baseline 이후 별도 축으로 남아 있다.
 
 자세한 수치는 [report.md](report.md)를 참조.
 

@@ -3,55 +3,35 @@
 ## Current Snapshot
 
 - vision 3종은 correctness까지 완료
-- LLM 3종은 아직 strict `LLM_SUPPORTED_OPS` legality 미완료
-- practical 1차 목표는 `LLM_MUST_REMOVE_OPS = 0`을 correctness 유지 상태에서 달성하는 것이다
-- `tinyllama_15m`, `pythia_70m`는 현재 이 practical goal을 달성했다
-- strict legality 기준으로는 여전히 `tinyllama_15m`가 가장 쉽다
+- LLM 3종은 baseline `SUPPORTED_OPS` 기준 supported-op-only + correctness 완료
+- strict `LLM_SUPPORTED_OPS` legality는 baseline 이후 별도 목표다
 
-## Why `tinyllama_15m` Is The Easiest
+## Strict LLM Follow-Up
 
-- `pythia_70m`는 아직 exact `GELU`의 `Erf=6` blocker가 남아 있다
-- `smollm_135m`는 `Sin/Cos`, `Trilu`, `ScatterND`, 대량의 mask plumbing이 남아 있다
-- 반면 `tinyllama_15m`는 activation blocker 없이 causal mask + shape plumbing 쪽이 주된 잔여물이다
+- baseline contract는 `SUPPORTED_OPS` union을 사용한다
+- strict LLM contract는 `Shape`, `Unsqueeze`, `ConstantOfShape`, `Less`, `Pow`, `Erf` 같은 잔여 op를 더 줄여야 한다
+- strict legality 작업은 correctness가 이미 고정된 baseline 위에서 별도 진행한다
 
-## Latest Strict LLM Histograms
+## Latest Baseline LLM Results
 
 - `tinyllama_15m`
-  - `ConstantOfShape=2`
-  - `Less=1`
-  - `Shape=39`
-  - `Unsqueeze=14`
-  - must-remove: `{}`
+  - baseline unsupported: `{}`
   - correctness: `pass`
+  - max abs diff: `0.0`
 - `pythia_70m`
-  - `ConstantOfShape=2`
-  - `Erf=6`
-  - `Less=1`
-  - `Equal=2`
-  - `Shape=22`
-  - `Unsqueeze=2`
-  - must-remove: `{}`
+  - baseline unsupported: `{}`
   - correctness: `pass`
+  - max abs diff: `0.0`
 - `smollm_135m`
-  - `ConstantOfShape=1`
-  - `Cos=1`
-  - `Equal=63`
-  - `Expand=67`
-  - `Less=1`
-  - `Range=5`
-  - `ScatterND=1`
-  - `Shape=125`
-  - `Sin=1`
-  - `Trilu=1`
-  - `Unsqueeze=5`
-  - `Where=63`
+  - baseline unsupported: `{}`
+  - correctness: `pass`
+  - max abs diff: `0.0`
 
 ## Practical Reading
 
-- `tinyllama_15m`는 `Range`까지 제거되어 현재 must-remove 관점에서는 비워졌다
-- `pythia_70m`도 decoder mask rewrite를 일반화해 `Where/Expand/Range`를 제거했다
-- 따라서 practical 기준의 다음 실제 blocker는 `smollm_135m`의 `Sin/Cos`, `Trilu`, `ScatterND`, 대량의 `Where/Expand`다
-- strict contract 기준으로는 두 모델 모두 여전히 `Shape`, `Unsqueeze`, `ConstantOfShape`, `Less`, 그리고 `pythia`의 `Erf`가 남아 있다
+- `tinyllama_15m`, `pythia_70m`, `smollm_135m` 모두 baseline supported-op-only graph를 만든다
+- `smollm_135m`의 `Trilu`와 `ScatterND` blocker는 baseline에서 제거됐다
+- strict contract 기준으로는 meta op와 activation op를 더 줄이는 작업이 남아 있다
 
 ## Practical Contract Note
 

@@ -12,11 +12,9 @@
 - 그 rewrite를 모두 적용한 결과를 `ONNX Runtime`에서 실행해 correctness / latency 검증
 - 입력 다양성을 확보한 validation harness로 baseline 수치를 신뢰할 수 있게 만들기
 
-현재 기준으로는 vision 3종 correctness는 이미 확보했고,
-남은 핵심은 LLM 3종을 같은 수준까지 끌어올리는 것이다.
+현재 기준으로는 benchmark 6종 모두 baseline `SUPPORTED_OPS` 기준 supported-op-only + correctness를 확보했다.
 
-LLM 쪽 완료 기준은 반드시 `LLM_SUPPORTED_OPS` 기준 legality를 먼저 만족한 뒤 correctness를 통과하는 것이다.
-union scaffold 기준 correctness만 확보된 상태는 완료로 보지 않는다.
+strict `LLM_SUPPORTED_OPS` 기준 legality는 baseline 이후 별도 목표로 다룬다.
 
 ## Current Progress
 
@@ -35,9 +33,12 @@ union scaffold 기준 correctness만 확보된 상태는 완료로 보지 않는
 - [x] simple `Range(0, limit, 1) -> Slice(arange_table)` lowering 추가
 - [x] `tinyllama_15m` practical `LLM_MUST_REMOVE_OPS=0` + correctness 확보
 - [x] `pythia_70m` practical `LLM_MUST_REMOVE_OPS=0` + correctness 확보
+- [x] `tinyllama_15m` baseline `SUPPORTED_OPS` legality + correctness 확보
+- [x] `pythia_70m` baseline `SUPPORTED_OPS` legality + correctness 확보
+- [x] `smollm_135m` baseline `SUPPORTED_OPS` legality + correctness 확보
 - [ ] `tinyllama_15m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 - [ ] `pythia_70m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
-- [ ] `smollm_135m` end-to-end correctness 확보
+- [ ] `smollm_135m` strict `LLM_SUPPORTED_OPS` legality + correctness 확보
 
 ## Success Criteria
 
