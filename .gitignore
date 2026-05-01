@@ -24,4 +24,5 @@ benchmarks/onnx/
 
 # Misc
 *.log
+*.pdf
 artifacts/

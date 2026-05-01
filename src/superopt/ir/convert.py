@@ -90,7 +90,61 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     Uses ``ref_model`` for opset version, metadata, and original
     graph inputs/outputs spec.
     """
-    raise NotImplementedError("ir_to_onnx: TODO")
+    ref_graph = ref_model.graph
+
+    # Collect graph input and output specs from ref model.
+    graph_inputs = list(ref_graph.input)
+    graph_outputs = list(ref_graph.output)
+
+    # Build initializers from IRGraph.
+    initializers: list[TensorProto] = []
+    for name, arr in ir.initializers.items():
+        initializers.append(numpy_helper.from_array(arr, name=name))
+
+    # Build nodes in topological order, skipping leaf/noop ops.
+    nodes: list[onnx.NodeProto] = []
+    for nid in ir.topo_order():
+        node = ir.nodes[nid]
+        if node.op in (OP_INPUT, OP_WEIGHT, OP_NOOP):
+            continue
+        attrs = node.attrs_dict
+        onnx_node = onnx.helper.make_node(
+            node.op,
+            inputs=list(node.inputs),
+            outputs=[node.id],
+            **_attrs_to_kwargs(attrs),
+        )
+        nodes.append(onnx_node)
+
+    graph_def = onnx.helper.make_graph(
+        nodes,
+        ref_graph.name,
+        graph_inputs,
+        graph_outputs,
+        initializer=initializers,
+    )
+
+    model = onnx.helper.make_model(graph_def)
+    model.ir_version = ref_model.ir_version
+    del model.opset_import[:]
+    for opset in ref_model.opset_import:
+        new_opset = model.opset_import.add()
+        new_opset.domain = opset.domain
+        new_opset.version = opset.version
+
+    onnx.checker.check_model(model)
+    return model
+
+
+def _attrs_to_kwargs(attrs: dict[str, Any]) -> dict[str, Any]:
+    """Convert IR attribute dict to onnx.helper.make_node kwargs."""
+    kwargs: dict[str, Any] = {}
+    for key, val in attrs.items():
+        if isinstance(val, np.ndarray):
+            kwargs[key] = numpy_helper.from_array(val)
+        else:
+            kwargs[key] = val
+    return kwargs
 
 
 # --- helpers ---
