@@ -23,10 +23,23 @@ def get_layout_rules() -> list[RewriteRule]:
         target=PatternNode("Reshape", (x, PatternVar("?z"))),
     ))
 
-    rules.append(RewriteRule(
-        name="transpose_transpose_identity",
-        source=PatternNode("Transpose", (PatternNode("Transpose", (x,), attrs=(("perm", (0, 1)),)),), attrs=(("perm", (0, 1)),)),
-        target=x,
-    ))
+    # Transpose(Transpose(x, p), p) → x  for common permutations.
+    # Each fires only when both transposes have the exact same perm,
+    # which is its own inverse (involution).
+    # (0,1) — 2D swap, (1,0) — 2D swap
+    for perm in [(0, 1), (1, 0)]:
+        rules.append(RewriteRule(
+            name=f"transpose_cancel_perm_{'_'.join(str(p) for p in perm)}",
+            source=PatternNode(
+                "Transpose",
+                (PatternNode("Transpose", (x,), attrs=(("perm", perm),)),),
+                attrs=(("perm", perm),),
+            ),
+            target=x,
+        ))
+
+    # General transpose cancel: Transpose(Transpose(x, p1), inv(p1)) → x
+    # Requires extending pattern matching to expose matched attrs.
+    # TODO: implement when attr-aware substitutions are supported.
 
     return rules

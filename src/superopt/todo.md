@@ -490,73 +490,90 @@ def superoptimize(
 
 ## 3. 구현 순서
 
-### Phase 0: Scaffold
+### Phase 0: Scaffold ✅
 
-[ ] `src/superopt/__init__.py` 생성
-[ ] 디렉토리 구조 생성 (`ir/`, `egraph/`, `rules/`, `explore/`, `extract/`)
-[ ] `src/common/contracts.py`에서 `SUPPORTED_OPS` import 확인
+[x] `src/superopt/__init__.py` 생성
+[x] 디렉토리 구조 생성 (`ir/`, `egraph/`, `rules/`, `explore/`, `extract/`)
+[x] `src/common/contracts.py`에서 `SUPPORTED_OPS` import 확인
 
-### Phase 1: IR + ONNX 변환
+### Phase 1: IR + ONNX 변환 ✅
 
-[ ] `IRNode`, `IRGraph` dataclass 정의 (`ir/node.py`, `ir/graph.py`)
-[ ] `onnx_to_ir()`: ONNX model → IRGraph 변환 (`ir/convert.py`)
-[ ] `ir_to_onnx()`: IRGraph → ONNX model 변환 (`ir/convert.py`)
-[ ] 변환 round-trip 테스트: `onnx → ir → onnx` 후 ORT correctness 확인
+[x] `IRNode`, `IRGraph` dataclass 정의 (`ir/node.py`, `ir/graph.py`)
+[x] `onnx_to_ir()`: ONNX model → IRGraph 변환 (`ir/convert.py`)
+[x] `ir_to_onnx()`: IRGraph → ONNX model 변환 (`ir/convert.py`)
+[x] multi-output node 처리 (`OP_PROJ` projection node)
+[x] 변환 round-trip 테스트: `onnx → ir → onnx` 후 ORT correctness 확인
 
-### Phase 2: E-Graph Core
+### Phase 2: E-Graph Core ✅
 
-[ ] `UnionFind` 구현
-[ ] `ENode`, `EClass`, `EGraph` 구현 (`egraph/`)
-[ ] `add()`, `merge()`, `find()`, `rebuild()` 구현
-[ ] `AnalysisData` 및 e-class analysis 구현
-[ ] `ir_to_egraph()`: IRGraph → EGraph 초기화
-[ ] `egraph_to_ir()`: EGraph에서 (trivial) IRGraph 추출 — extraction 전 sanity check용
+[x] Union-find 기반 `EGraph` 구현 (`egraph/egraph.py`)
+[x] `ENode`, `EClass` 구현 (`egraph/enode.py`, `egraph/eclass.py`)
+[x] `add()`, `merge()`, `find()`, `rebuild()` 구현 (egg-style repair)
+[x] `AnalysisData` 및 e-class analysis 구현 (`egraph/analysis.py`)
+[x] `ir_to_egraph()`: IRGraph → EGraph 초기화 (`pipeline.py`)
 
-### Phase 3: Pattern Matching + Rules
+### Phase 3: Pattern Matching + Rules ✅ (기본 골격)
 
-[ ] `Pattern`, `PatternVar`, `PatternNode` 정의 (`egraph/pattern.py`)
-[ ] single-pattern search 구현: e-graph에서 패턴 매칭
-[ ] match apply 구현: match 결과로 target e-node 추가 + merge
-[ ] 기본 arithmetic rule 5개 정의 (`rules/arithmetic.py`)
-[ ] 기본 legalization rule 3개 정의 (`rules/legalization.py`): Neg→Mul, Pow→Mul, x+0→x
+[x] `Pattern`, `PatternVar`, `PatternNode` 정의 (`egraph/pattern.py`)
+[x] single-pattern search 구현
+[x] match apply 구현 (`rules/base.py`: `apply_rule`, `_instantiate`)
+[x] `RewriteRule` with `check` / `apply_fn` callbacks
+[x] arithmetic rules: `add_comm`, `mul_comm`, `add_assoc_right`, `mul_assoc_right`
+[x] layout rules: `reshape_reshape`, `transpose_transpose_identity` (perm=(0,1) only)
+[x] fusion rules: `bias_add_commute`
 
-### Phase 4: Exploration
+### Phase 4: Exploration ✅
 
-[ ] exploration 메인 루프 구현 (`explore/explorer.py`)
-[ ] vanilla cycle filtering 구현 (`explore/cycle.py`)
-[ ] saturation 판정 구현
-[ ] 작은 합성 그래프로 exploration 동작 확인
+[x] exploration 메인 루프 구현 (`explore/explorer.py`)
+[x] saturation 판정 구현
+[x] `ExploreStats` 리포팅
+[x] `check.sh` smoke test (tinyllama_15m) — steps 1-7 pass
 
-### Phase 5: Extraction
+### Phase 5: Extraction ✅
 
-[ ] greedy extraction 구현 (`extract/greedy.py`)
-[ ] uniform cost model 구현 (`extract/cost.py`)
-[ ] legality hard filter 구현: unsupported op e-node는 선택 후보에서 제외
-[ ] extraction 결과를 IRGraph로 변환
-[ ] 작은 합성 그래프로 extraction 동작 확인
+[x] greedy extraction 구현 (`extract/greedy.py`)
+[x] uniform cost model + legality hard filter (`extract/cost.py`)
+[x] extraction 결과를 IRGraph로 변환
+[x] ILP extraction via `scipy.optimize.milp` (`extract/ilp.py`)
 
-### Phase 6: End-to-End Pipeline
+### Phase 6: End-to-End Pipeline ✅
 
-[ ] `pipeline.py`: ONNX → superopt → ONNX 전체 흐름 연결
-[ ] `mobilenetv2`에서 end-to-end 실행
-[ ] correctness 확인 (원본 vs superopt)
-[ ] latency 측정 (원본 vs baseline vs superopt)
+[x] `pipeline.py`: ONNX → superopt → ONNX 전체 흐름 연결
+[x] `tinyllama_15m`에서 end-to-end 실행 (`check.sh` 7단계 pass)
 
-### Phase 7: Rule 확장 + 실험
+### Phase 7: Rule 확장 ← **현재 단계**
 
-[ ] legalization rule 확장: LayerNorm, GELU, RoPE 등
-[ ] layout rule 추가: transpose fusion, reshape chain
-[ ] fusion rule 추가: matmul merge (multi-pattern)
+현재 상태: 7개 rules (arithmetic 4, layout 2, fusion 1). Legalization은 0개.
+`check.sh` extraction에서 illegal ops 발견: Neg, Pow, Shape, Squeeze, Unsqueeze, Equal, Expand, Less, Range, Where, Constant, ConstantOfShape.
+
+**7a. Baseline-complete legalization rules** (진행 중)
+
+[ ] `neg_to_mul`: Neg(x) → Mul(x, Constant(-1)) — `apply_fn`으로 상수 합성
+[ ] `greater_to_less`: Greater(a, b) → Less(b, a) — pure pattern
+[ ] `squeeze_to_reshape`: Squeeze(x, axes) → Reshape(x, shape) — `apply_fn` + shape analysis
+[ ] `unsqueeze_to_reshape`: Unsqueeze(x, axes) → Reshape(x, shape) — same
+[ ] `sub_to_add_neg`: Sub(x, y) → Add(x, Neg(y)) — pure pattern (Neg는 neg_to_mul로 chain)
+
+**7b. Layout rule 개선**
+
+[ ] `transpose_transpose_identity`: perm=(0,1) 하드코딩 → 일반 inverse permutation check로 확장
+
+**7c. 향후 확장** (이 PR 이후)
+
+[ ] Pow rules: `Pow(x,2)→Mul(x,x)`, `Pow(x,0.5)→Sqrt(x)`, `Pow(x,1)→x` — 상수 값 전파 필요
+[ ] LayerNorm decomposition
+[ ] GELU decomposition
+[ ] multi-pattern fusion rules (matmul merge)
 [ ] efficient cycle filtering 구현
 [ ] benchmark 6종 전체 실험
 [ ] baseline rewrite 대비 latency 비교 report
 
-### Phase 8: ILP Extraction (선택적)
+### Phase 8: ILP Extraction ✅ (기본 구현)
 
-[ ] ILP formulation 구현 (`extract/ilp.py`)
-[ ] legality를 ILP hard constraint로 추가
+[x] ILP formulation 구현 (`extract/ilp.py`)
+[x] `scipy.optimize.milp` 기반
+[ ] legality를 ILP hard constraint로 추가 (현재 greedy만 legality-aware)
 [ ] greedy vs ILP 비교 실험
-[ ] ILP solver: `scipy.optimize.milp` 또는 `python-mip` 또는 `OR-Tools`
 
 ---
 
