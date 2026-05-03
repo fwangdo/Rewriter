@@ -22,19 +22,16 @@ def get_legalization_rules() -> list[RewriteRule]:
 
     rules: list[RewriteRule] = []
 
-    # These initial rules intentionally avoid constant synthesis.
-    # They are legality-oriented canonicalizations that can coexist with
-    # baseline ONNX rewrites.
-    rules.append(RewriteRule(
-        name="sub_to_add_neg",
-        source=PatternNode("Sub", (x, PatternVar("?y"))),
-        target=PatternNode("Add", (x, PatternNode("Neg", (PatternVar("?y"),)))),
-    ))
+    # TODO: implement legalization rules that lower unsupported ops
+    # into supported equivalents. Examples from todo.md:
+    #   Pow(x, 2) → Mul(x, x)
+    #   Neg(x) → Mul(x, -1)           (requires constant synthesis)
+    #   LayerNorm → ReduceMean + Sub + Mul + ...
+    #   GELU_exact → GELU_tanh approx
+    #
+    # Current stubs (Sub→Add+Neg, Div→Mul+Reciprocal) were wrong:
+    # they introduced NEW unsupported ops (Neg, Reciprocal).
+    # Real legalization must only produce ops in supported_ops.
 
-    rules.append(RewriteRule(
-        name="div_to_mul_recip",
-        source=PatternNode("Div", (x, PatternVar("?y"))),
-        target=PatternNode("Mul", (x, PatternNode("Reciprocal", (PatternVar("?y"),)))),
-    ))
-
+    # TODO: implement actual legalization rules.
     return rules

@@ -33,20 +33,26 @@ def will_create_cycle(
     """Check if applying this rule with the given match would
     introduce a cycle in the e-graph.
 
-    Vanilla implementation: conservative check using the descendant
-    relationship.  If the matched e-class is a descendant of any
-    variable binding in the substitution, applying the rule would
-    create a cycle.
+    Vanilla implementation: a cycle would be created if the target
+    pattern references an e-class that is an *ancestor* of match_cid.
+    Merging match_cid with a target that points to an ancestor would
+    create a circular dependency.
+
+    Equivalently: if match_cid is a descendant of any target variable
+    binding, applying the rule creates a cycle.
     """
     # Collect all e-class ids referenced in the target pattern
     target_refs = _collect_var_refs(rule.target, subst)
 
-    # Check if match_cid is an ancestor of any target reference
+    match_canon = egraph.find(match_cid)
     for ref_cid in target_refs:
         ref_cid = egraph.find(ref_cid)
-        if ref_cid == egraph.find(match_cid):
+        if ref_cid == match_canon:
             continue  # self-reference is ok
-        if _is_descendant(egraph, egraph.find(match_cid), ref_cid):
+        # Does ref_cid have match_cid as a descendant?
+        # i.e., is match_cid reachable from ref_cid?
+        # If so, merging would create a cycle.
+        if _is_descendant(egraph, ref_cid, match_canon):
             return True
     return False
 

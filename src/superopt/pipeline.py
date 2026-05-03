@@ -26,7 +26,25 @@ from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
 from .rules.legalization import get_legalization_rules
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
+
+
+def _hashable_attrs(
+    attrs: tuple[tuple[str, object], ...],
+) -> tuple[tuple[str, object], ...]:
+    """Make IR attrs hashable for ENode memo dedup.
+
+    numpy arrays are converted to (dtype, shape, bytes) tuples.
+    """
+    result = []
+    for k, v in attrs:
+        if isinstance(v, np.ndarray):
+            result.append((k, (str(v.dtype), v.shape, v.tobytes())))
+        else:
+            result.append((k, v))
+    return tuple(result)
 
 
 @dataclass
@@ -52,7 +70,16 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     for nid in ir.topo_order():
         node = ir.nodes[nid]
         children = tuple(node_to_cid[inp] for inp in node.inputs)
-        enode = ENode(op=node.op, children=children, attrs=node.attrs)
+        # Leaf nodes (weight, input) have no children and no attrs,
+        # so they'd all dedup to the same e-node. Tag them with their
+        # id so each leaf gets its own e-class.
+        attrs = node.attrs
+        if node.op in (OP_INPUT, OP_WEIGHT):
+            attrs = (("__name__", nid),)
+        # ENode must be hashable for memo dedup. Convert any numpy
+        # arrays in attrs to bytes so the tuple is hashable.
+        attrs = _hashable_attrs(attrs)
+        enode = ENode(op=node.op, children=children, attrs=attrs)
         cid = egraph.add(enode)
         node_to_cid[nid] = cid
 
@@ -85,36 +112,46 @@ def superoptimize(
     # responsibility localized to conversion.
     model = onnx.load(input_path)
 
-    # ONNX → IR.
+    # ONNX → IR.,
+    # TODO: checkpoint1. 
     ir = onnx_to_ir(model)
     original_nodes = sum(
         1 for n in ir.nodes.values()
+        # consider meaningful operation only 
         if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
     # IR → e-graph.
+    # TODO: checkpoint 2. 
     egraph, root_cid = ir_to_egraph(ir)
 
     # Gather all rewrite rules.
+    # checkpoint 3. 
     rules = (
         get_arithmetic_rules()
         + get_layout_rules()
         + get_fusion_rules()
         + get_legalization_rules()
     )
+    
+    # setup is done. 
 
     # Explore (equality saturation).
+    # checkpoint 4. 
     explore_stats = explore(egraph, rules, max_iter=max_iter, max_nodes=max_nodes)
 
     # Extract best program.
+    # checkpoint 5. 
     cost_model = CostModel(supported_ops)
-    opt_ir = extract_greedy(egraph, root_cid, cost_model)
+    opt_ir = extract_greedy(egraph, root_cid, cost_model) # selection. 
 
     # Carry over only initializer leaves that survived extraction.
     for name, node in opt_ir.nodes.items():
         if node.op == OP_WEIGHT:
             if name not in ir.initializers:
                 raise KeyError(f"missing initializer payload for extracted weight: {name}")
+
+            # keu factor? we should care about legality. 
             opt_ir.add_initializer(name, ir.initializers[name])
 
     # IR → ONNX.
@@ -134,7 +171,10 @@ def superoptimize(
     }
     legality_ok = len(unsupported) == 0
     if unsupported:
-        logger.warning("unsupported ops in output: %s", unsupported)
+        logger.warning(
+            "legality violation: output contains unsupported ops %s",
+            unsupported,
+        )
 
     return SuperoptResult(
         input_path=input_path,

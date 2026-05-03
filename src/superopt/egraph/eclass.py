@@ -56,4 +56,5 @@ class EClass:
 
     id: int
     nodes: set[ENodeId] = field(default_factory=set)
+    parents: set[ENodeId] = field(default_factory=set)
     data: AnalysisData = field(default_factory=AnalysisData)

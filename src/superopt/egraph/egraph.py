@@ -8,6 +8,8 @@ Reference: egg (Willsey et al., 2020).
 
 from __future__ import annotations
 
+from collections import deque
+
 from .eclass import AnalysisData, EClass
 from .enode import EClassId, ENode, ENodeId
 
@@ -24,11 +26,13 @@ class EGraph:
         self._nodes: dict[ENodeId, ENode] = {}
         # dedup memo: canonical ENode → e-class id
         self._memo: dict[ENode, EClassId] = {}
+        # reverse map: enode id → owning e-class id
+        self._node_to_class: dict[ENodeId, EClassId] = {}
         # counters
         self._next_class_id: int = 0
         self._next_node_id: int = 0
         # pending merges for rebuild
-        self._pending: list[tuple[EClassId, EClassId]] = []
+        self._pending: list[EClassId] = []
 
     # --- public API ---
 
@@ -57,6 +61,11 @@ class EGraph:
         self._nodes[nid] = canon
         ec.nodes.add(nid)
         self._memo[canon] = cid
+        self._node_to_class[nid] = cid
+
+        # Register parent links: this enode is a parent of each child eclass
+        for child_cid in canon.children:
+            self._classes[self.find(child_cid)].parents.add(nid)
 
         return cid
 
@@ -73,8 +82,12 @@ class EGraph:
             c1, c2 = c2, c1
         self._parent[id2] = id1
         c1.nodes |= c2.nodes
+        c1.parents |= c2.parents
         c1.data = AnalysisData.join(c1.data, c2.data)
-        self._pending.append((id1, id2))
+        # Update _node_to_class for merged nodes
+        for nid in c2.nodes:
+            self._node_to_class[nid] = id1
+        self._pending.append(id1)
         return id1
 
     def find(self, cid: EClassId) -> EClassId:
@@ -90,24 +103,67 @@ class EGraph:
     def rebuild(self) -> None:
         """Restore e-graph invariants after merges.
 
-        Re-canonicalizes all e-nodes whose children's canonical ids
-        may have changed, and updates the memo table.
+        Implements egg's rebuild algorithm: re-canonicalize parent enodes,
+        detect new congruences, and re-propagate analysis data upward.
         """
-        while self._pending:
-            _, merged_id = self._pending.pop()
-            merged_class = self._classes.get(merged_id)
-            if merged_class is None:
-                continue
-            for nid in merged_class.nodes:
-                old = self._nodes[nid]
-                new = old.canonicalize(
-                    {c: self.find(c) for c in old.children}
+        worklist = deque(self._pending)
+        self._pending.clear()
+
+        while worklist:
+            cid = self.find(worklist.popleft())
+            self._repair(cid, worklist)
+
+    def _repair(self, cid: EClassId, worklist: deque) -> None:
+        ec = self._classes[cid]
+
+        # Phase 1: Re-canonicalize parent enodes, update memo, detect congruences
+        old_parents = list(ec.parents)
+        new_parents: dict[ENode, tuple[ENodeId, EClassId]] = {}
+
+        for nid in old_parents:
+            old_enode = self._nodes[nid]
+            new_enode = old_enode.canonicalize(
+                {c: self.find(c) for c in old_enode.children}
+            )
+            self._nodes[nid] = new_enode
+            # Remove stale memo entry
+            self._memo.pop(old_enode, None)
+
+            parent_cid = self.find(self._node_to_class[nid])
+
+            if new_enode in new_parents:
+                # Congruence: two parent enodes now have the same canonical form
+                existing_nid, existing_cid = new_parents[new_enode]
+                merged = self.merge(existing_cid, parent_cid)
+                new_parents[new_enode] = (existing_nid, merged)
+                worklist.append(merged)
+            else:
+                new_parents[new_enode] = (nid, self.find(parent_cid))
+
+            self._memo[new_enode] = self.find(new_parents[new_enode][1])
+
+        # Rebuild the parents set with surviving nids
+        ec.parents = {nid for _, (nid, _) in new_parents.items()}
+
+        # Phase 2: Re-compute analysis (make + join)
+        # Shape inference is approximate, so skip update on conflicts.
+        from .analysis import compute_analysis
+
+        new_data = AnalysisData()
+        try:
+            for nid in ec.nodes:
+                enode = self._nodes[nid]
+                new_data = AnalysisData.join(
+                    new_data, compute_analysis(self, enode)
                 )
-                self._nodes[nid] = new
-                if new in self._memo:
-                    self.merge(self._memo[new], self.find(merged_id))
-                else:
-                    self._memo[new] = self.find(merged_id)
+        except ValueError:
+            return
+        if new_data != ec.data:
+            ec.data = new_data
+            # Propagate upward: parents of this eclass need re-check
+            for nid in ec.parents:
+                p_cid = self.find(self._node_to_class[nid])
+                worklist.append(p_cid)
 
     # --- query ---
 

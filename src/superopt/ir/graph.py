@@ -35,6 +35,7 @@ class IRGraph:
         self.nodes[node.id] = node
 
     def add_initializer(self, name: str, value: np.ndarray) -> None:
+        # already fixed weight value in onnx.  
         self.initializers[name] = value
 
     # --- query helpers ---

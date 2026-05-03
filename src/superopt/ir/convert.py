@@ -192,11 +192,30 @@ def _attrs_to_kwargs(attrs: dict[str, Any]) -> dict[str, Any]:
     """Convert IR attribute dict to onnx.helper.make_node kwargs."""
     kwargs: dict[str, Any] = {}
     for key, val in attrs.items():
+        # Skip internal e-graph metadata attrs.
+        if key.startswith("__"):
+            continue
         if isinstance(val, np.ndarray):
             kwargs[key] = numpy_helper.from_array(val)
+        elif _is_hashable_ndarray(val):
+            # Reconstruct numpy array from hashable form (dtype_str, shape, bytes).
+            dtype_str, shape, data = val
+            arr = np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape)
+            kwargs[key] = numpy_helper.from_array(arr)
         else:
             kwargs[key] = val
     return kwargs
+
+
+def _is_hashable_ndarray(val: Any) -> bool:
+    """Check if val is a (dtype_str, shape, bytes) tuple from _hashable_attrs."""
+    return (
+        isinstance(val, tuple)
+        and len(val) == 3
+        and isinstance(val[0], str)
+        and isinstance(val[1], tuple)
+        and isinstance(val[2], bytes)
+    )
 
 
 # --- helpers ---
@@ -240,8 +259,12 @@ def _graph_inputs_for_ir(
     ref_graph: onnx.GraphProto,
 ) -> list[onnx.ValueInfoProto]:
     ref_inputs = {inp.name: inp for inp in ref_graph.input}
+    # If ir.inputs is not set, infer from OP_INPUT nodes.
+    input_names = ir.inputs if ir.inputs else tuple(
+        nid for nid, n in ir.nodes.items() if n.op == OP_INPUT
+    )
     inputs: list[onnx.ValueInfoProto] = []
-    for name in ir.inputs:
+    for name in input_names:
         if name not in ir.nodes or ir.nodes[name].op != OP_INPUT:
             continue
         if name in ref_inputs:

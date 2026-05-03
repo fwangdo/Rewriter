@@ -9,7 +9,14 @@ from __future__ import annotations
 from ..egraph.enode import ENode
 from ..ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
-_FREE_OPS = frozenset({OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ})
+# Ops that are always legal and have zero cost.
+# These are structural/boundary ops, not compute ops.
+# Constant/ConstantOfShape are ONNX-level constant producers
+# (equivalent to initializers at runtime).
+_FREE_OPS = frozenset({
+    OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ,
+    "Constant", "ConstantOfShape",
+})
 
 
 class CostModel:

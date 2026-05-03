@@ -5,11 +5,15 @@ Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 
 from __future__ import annotations
 
+import logging
+
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
 from ..ir.graph import IRGraph
 from ..ir.node import IRNode
 from .cost import CostModel
+
+logger = logging.getLogger(__name__)
 
 
 def extract_greedy(
@@ -28,24 +32,22 @@ def extract_greedy(
     # Map each canonical e-class id → chosen e-node.
     best: dict[EClassId, tuple[float, ENode]] = {}
 
-    # Collect all reachable e-class ids from root via BFS.
+    # Collect all reachable e-class ids from root in topological order
+    # (leaves first) via DFS post-order.
     reachable: list[EClassId] = []
     visited: set[EClassId] = set()
-    stack = [egraph.find(root_cid)]
-    while stack:
-        cid = egraph.find(stack.pop())
+
+    def _dfs_postorder(cid: EClassId) -> None:
+        cid = egraph.find(cid)
         if cid in visited:
-            continue
+            return
         visited.add(cid)
-        reachable.append(cid)
         for enode in egraph.eclass_nodes(cid):
             for child in enode.children:
-                child_canon = egraph.find(child)
-                if child_canon not in visited:
-                    stack.append(child_canon)
+                _dfs_postorder(egraph.find(child))
+        reachable.append(cid)
 
-    # Process in reverse (leaves first) for bottom-up cost propagation.
-    reachable.reverse()
+    _dfs_postorder(egraph.find(root_cid))
 
     for cid in reachable:
         enodes = egraph.eclass_nodes(cid)
@@ -70,8 +72,15 @@ def extract_greedy(
                 if best_legal is None or total < best_legal[0]:
                     best_legal = (total, enode)
 
-        chosen = best_legal if best_legal is not None else best_any
-        if chosen is None:
+        if best_legal is not None:
+            chosen = best_legal
+        elif best_any is not None:
+            logger.warning(
+                "e-class %d: no legal e-node, falling back to op=%r",
+                cid, best_any[1].op,
+            )
+            chosen = best_any
+        else:
             raise ValueError(f"cannot extract e-class {cid}: no e-nodes available")
         best[cid] = chosen
 
