@@ -26,4 +26,13 @@ benchmarks/onnx/
 *.log
 *.pdf
 artifacts/
-paper/
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+
+tensat/
