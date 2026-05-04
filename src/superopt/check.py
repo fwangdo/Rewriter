@@ -133,9 +133,17 @@ def cp7_full_pipeline(model_path: str, output_path: str):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     result = superoptimize(
         model_path, output_path, LLM_SUPPORTED_OPS,
-        max_iter=3, max_nodes=10000,
+        max_iter=15, max_nodes=50000,
     )
     print(f"  {result.original_nodes} → {result.optimized_nodes} nodes  legality_ok={result.legality_ok}")
+
+    # Compare with baseline
+    import onnx as _onnx
+    from collections import Counter as _Counter
+    opt_model = _onnx.load(output_path)
+    ops = _Counter(n.op_type for n in opt_model.graph.node)
+    illegal = {op: cnt for op, cnt in ops.items() if op not in LLM_SUPPORTED_OPS}
+    print(f"  total_onnx_ops={sum(ops.values())}  illegal={dict(sorted(illegal.items()))}")
 
 
 def main():
