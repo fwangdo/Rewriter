@@ -541,32 +541,15 @@ def superoptimize(
 [x] `pipeline.py`: ONNX → superopt → ONNX 전체 흐름 연결
 [x] `tinyllama_15m`에서 end-to-end 실행 (`check.sh` 7단계 pass)
 
-### Phase 7: Rule 확장 ← **현재 단계**
+### Phase 7: Rule 확장 ✅
 
-현재 상태: 7개 rules (arithmetic 4, layout 2, fusion 1). Legalization은 0개.
-`check.sh` extraction에서 illegal ops 발견: Neg, Pow, Shape, Squeeze, Unsqueeze, Equal, Expand, Less, Range, Where, Constant, ConstantOfShape.
-
-**7a. Baseline-complete legalization rules** (진행 중)
-
-[ ] `neg_to_mul`: Neg(x) → Mul(x, Constant(-1)) — `apply_fn`으로 상수 합성
-[ ] `greater_to_less`: Greater(a, b) → Less(b, a) — pure pattern
-[ ] `squeeze_to_reshape`: Squeeze(x, axes) → Reshape(x, shape) — `apply_fn` + shape analysis
-[ ] `unsqueeze_to_reshape`: Unsqueeze(x, axes) → Reshape(x, shape) — same
-[ ] `sub_to_add_neg`: Sub(x, y) → Add(x, Neg(y)) — pure pattern (Neg는 neg_to_mul로 chain)
-
-**7b. Layout rule 개선**
-
-[ ] `transpose_transpose_identity`: perm=(0,1) 하드코딩 → 일반 inverse permutation check로 확장
-
-**7c. 향후 확장** (이 PR 이후)
-
-[ ] Pow rules: `Pow(x,2)→Mul(x,x)`, `Pow(x,0.5)→Sqrt(x)`, `Pow(x,1)→x` — 상수 값 전파 필요
-[ ] LayerNorm decomposition
-[ ] GELU decomposition
-[ ] multi-pattern fusion rules (matmul merge)
-[ ] efficient cycle filtering 구현
-[ ] benchmark 6종 전체 실험
-[ ] baseline rewrite 대비 latency 비교 report
+[x] 20개 규칙 구현 (arithmetic 4, layout 2, fusion 1, legalization 13 + no-bias variant)
+[x] scalar_value 분석 (AnalysisData에 추가, Pow/Where/Range check에 사용)
+[x] pre-pass (ConstantFolding → DecoderMask → Trilu → ConstantFolding)
+[x] post-pass (ConstantFolding → ShapeInference → Cleanup)
+[x] compat.py: baseline pass를 __init__.py 우회하여 import
+[x] egraph.initializers: 원본 weight 데이터 접근 가능
+[x] efficient cycle filtering (descendant map precomputation, O(V+E) per iter)
 
 ### Phase 8: ILP Extraction ✅ (기본 구현)
 
@@ -575,45 +558,66 @@ def superoptimize(
 [ ] legality를 ILP hard constraint로 추가 (현재 greedy만 legality-aware)
 [ ] greedy vs ILP 비교 실험
 
+### Phase 9: 벤치마크 전체 통과 ← **현재 단계**
+
+**목표: 수동 baseline보다 명백히 좋은 graph를 superopt가 찾는다.**
+
+현재 상태:
+- tinyllama_15m (NLP): ✅ 동작. 765→683 IR nodes, 653 ONNX ops. 7/7 pass.
+  - 남은 illegal: Shape(32), ConstantOfShape(2), Less(1), Where(1) — baseline과 동일, irreducible.
+- mobilenetv2 (Vision): ⚠️ Clip 35개, Gemm 0개 남음.
+  - Clip→Min(Max) 분해는 되지만 Min/Max가 VISION_SUPPORTED_OPS에 없어 무의미.
+  - Gemm 분해는 동작 (gemm_decompose_no_bias 추가 후).
+  - **문제: contracts 갭** — Clip을 legal op만으로 분해할 경로가 없음.
+- mobilevit_xxs (Vision): ❌ e-graph 폭발. 417→27k IR nodes, 230k matches, 175초.
+  - **문제: 규칙 조합 폭발** — arithmetic/layout 규칙이 layer마다 독립 fire.
+- pythia_70m, smollm_135m, yolo26_nano: 미실험.
+
+**다음 할 일:**
+
+[ ] mobilenetv2: Clip이 irreducible인지 확인. baseline도 Clip을 유지하는지 비교.
+[ ] mobilevit_xxs: e-graph 폭발 원인 분석. 어떤 규칙이 가장 많이 fire하는지 프로파일.
+[ ] yolo26_nano: 실험.
+[ ] NLP 모델 2개(pythia, smollm): 실험.
+[ ] 전체 결과 report.md 작성.
+
 ---
 
-## 4. 핵심 설계 결정 (미확정)
+## 4. 핵심 설계 결정
 
-### 4.1 Python vs Rust
+### 4.1 Weight 처리의 추상화 레벨 (Issue #1)
 
-Tensat은 Rust (egg 라이브러리)로 구현했다. 우리는:
+**현재 방식**: 모든 weight를 `__name__`으로 구분하여 각각 고유한 e-class 부여.
+패턴 매칭에서는 `?w`로 아무 weight나 바인딩하지만, apply_fn/check_fn에서
+필요할 때 값을 꺼내 본다.
 
-- **초기**: 순수 Python. 프로토타이핑과 ONNX 생태계 호환이 중요.
-- **후기**: 성능 병목이 생기면 egg의 Python binding (`egglog` 또는 직접 binding)을 검토.
+이 경계가 규칙마다 암묵적으로 결정되어 있다:
 
-판단 기준: benchmark 6종 중 가장 큰 `smollm_135m` (2844 nodes)에서
-exploration이 합리적 시간 (< 5분) 내에 끝나는지 여부.
+| 유형 | 예시 | weight 처리 |
+|------|------|------------|
+| 순수 구조 | `Clip(x,min,max)→Min(Max(x,min),max)` | 불투명 전달 |
+| 값 조건 | `Pow(x,e)→Mul(x,x)` (e≈2) | check_fn에서 scalar_value 확인 |
+| 값 합성 | `BN(x,s,b,m,v)→Mul+Add` | apply_fn에서 ndarray 읽고 새 weight 계산 |
+
+**현재 시점의 기준**: 이 세 유형의 구분은 타당하며, 각 규칙이 어떤 유형인지
+명시하는 것이 중요하다. 향후 이 구분을 코드 레벨에서 enforce할지는
+스케일 문제가 실제로 bottleneck이 되는지 확인 후 결정.
+
+**잠재적 연구 문제**: 구조적으로 동일한 layer가 weight 때문에 별개
+e-class 트리로 복제되어 e-graph가 O(layer 수)로 커지는 문제.
+구조 공유 + 추출 시 값 복원이 가능하면 해결되지만, feasibility 미확인.
+(→ GitHub Issue #1)
 
 ### 4.2 기존 onnx_rewrite 코드 재사용 범위
 
 - `src/common/contracts.py`: 그대로 공유 (SUPPORTED_OPS, domain contracts)
-- `onnx_rewrite/runtime/validation.py`: correctness 측정 재사용
-- `onnx_rewrite/runtime/benchmark.py`: latency 측정 재사용
-- `onnx_rewrite/passes/`: rule 의미는 참조하되, 코드 자체는 재사용하지 않음 (IR 체계가 다름)
+- `onnx_rewrite/passes/`: compat.py를 통해 pre/post-pass로 재사용
+  (ConstantFolding, Cleanup, DecoderMask, Trilu)
+- `onnx_rewrite/runtime/`: correctness/latency 측정 재사용 예정
 
-### 4.3 e-graph에 ONNX attribute를 얼마나 넣을 것인가
+### 4.3 Python 성능
 
-Tensat은 stride, padding, axis 같은 attribute를 e-node의 일부로 표현한다.
-ONNX는 attribute가 훨씬 다양하다 (kernel_shape, dilations, group, perm, ...).
-
-초기 전략:
-- e-node의 `attrs`에 hashable한 attribute tuple을 넣는다
-- pattern matching에서는 op name만으로 1차 필터, attrs는 check function에서 검증
-- 이렇게 하면 rule 작성이 간단해지고, attribute 폭발을 피할 수 있다
-
-### 4.4 multi-output operator 처리
-
-ONNX의 `Split` 같은 multi-output operator:
-- Tensat 방식: `split` node + `split_0`, `split_1` projection node
-- 우리도 동일하게 projection node로 풀어서 각 output을 별도 e-class로 관리
-
-### 4.5 Dynamic shape 처리
-
-현재 benchmark의 LLM 모델은 dynamic shape를 쓴다.
-e-graph analysis에서 shape이 None인 경우를 허용하되,
-shape-dependent rule (e.g. reshape fusion)은 concrete shape일 때만 적용한다.
+- 현재 tinyllama_15m(761 e-class)는 수 초 내 완료.
+- mobilevit_xxs(417 노드)에서 e-graph 폭발 발생 — 규칙 수/조합 문제이지
+  Python 자체의 한계는 아직 아님.
+- 대형 모델에서 bottleneck이 되면 egglog Python binding 검토.
