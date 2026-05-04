@@ -85,11 +85,17 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
 
         # Propagate analysis data. add() may return an existing e-class, so
         # join instead of overwriting facts from an equivalent node.
+        scalar_value = None
+        if node.op == OP_WEIGHT and nid in ir.initializers:
+            arr = ir.initializers[nid]
+            if arr.size == 1:
+                scalar_value = float(arr.reshape(-1)[0])
         egraph.update_analysis(cid, AnalysisData(
             shape=node.shape,
             dtype=node.dtype,
             is_constant=(node.op == OP_WEIGHT),
             preferred_name=nid,
+            scalar_value=scalar_value,
         ))
 
     assert ir.root is not None
@@ -112,8 +118,12 @@ def superoptimize(
     # responsibility localized to conversion.
     model = onnx.load(input_path)
 
+    # Pre-pass: lower deep-pattern ops (DecoderMask, Trilu) at ONNX level.
+    from .compat import run_pre_passes
+    model = run_pre_passes(model)
+
     # ONNX → IR.,
-    # TODO: checkpoint1. 
+    # TODO: checkpoint1.
     ir = onnx_to_ir(model)
     original_nodes = sum(
         1 for n in ir.nodes.values()
@@ -146,16 +156,31 @@ def superoptimize(
     opt_ir = extract_greedy(egraph, root_cid, cost_model) # selection. 
 
     # Carry over only initializer leaves that survived extraction.
+    # Synthetic weights (created by legalization apply_fn) carry a
+    # __synth__ attr with (dtype_str, shape, bytes) for reconstruction.
     for name, node in opt_ir.nodes.items():
         if node.op == OP_WEIGHT:
-            if name not in ir.initializers:
-                raise KeyError(f"missing initializer payload for extracted weight: {name}")
-
-            # keu factor? we should care about legality. 
-            opt_ir.add_initializer(name, ir.initializers[name])
+            if name in ir.initializers:
+                opt_ir.add_initializer(name, ir.initializers[name])
+            else:
+                # Try to reconstruct from __synth__ attr.
+                synth = node.attrs_dict.get("__synth__")
+                if synth is not None:
+                    dtype_str, shape, data = synth
+                    arr = np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape)
+                    opt_ir.add_initializer(name, arr.copy())
+                else:
+                    raise KeyError(
+                        f"missing initializer payload for extracted weight: {name}"
+                    )
 
     # IR → ONNX.
     opt_model = ir_to_onnx(opt_ir, model)
+
+    # Post-pass: constant folding + cleanup to remove Constant/ConstantOfShape/Shape nodes.
+    from .compat import run_post_passes
+    opt_model = run_post_passes(opt_model)
+
     onnx.save(opt_model, output_path)
 
     optimized_nodes = sum(

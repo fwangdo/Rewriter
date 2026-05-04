@@ -23,6 +23,7 @@ class AnalysisData:
     dtype: int | None = None
     is_constant: bool = False
     preferred_name: str | None = None
+    scalar_value: float | None = None
 
     @staticmethod
     def join(a: AnalysisData, b: AnalysisData) -> AnalysisData:
@@ -42,11 +43,15 @@ class AnalysisData:
             if a.preferred_name is not None
             else b.preferred_name
         )
+        scalar_value = (
+            a.scalar_value if a.scalar_value is not None else b.scalar_value
+        )
         return AnalysisData(
             shape=shape,
             dtype=dtype,
             is_constant=is_constant,
             preferred_name=preferred_name,
+            scalar_value=scalar_value,
         )
 
 

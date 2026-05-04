@@ -36,10 +36,10 @@ def compute_analysis(egraph: EGraph, enode: ENode) -> AnalysisData:
         ec = egraph.eclass(child_cid)
         child_shapes.append(ec.data.shape)
 
-    if enode.op in {"Identity", "Relu", "Sigmoid", "Tanh", "Sqrt", "Cast"}:
+    if enode.op in {"Identity", "Relu", "Sigmoid", "Tanh", "Sqrt", "Cast", "Neg", "Softmax"}:
         return AnalysisData(shape=child_shapes[0], dtype=egraph.eclass(enode.children[0]).data.dtype)
 
-    if enode.op in {"Add", "Sub", "Mul", "Div", "Where"} and child_shapes:
+    if enode.op in {"Add", "Sub", "Mul", "Div", "Where", "Less", "Greater", "Equal", "Max", "Min", "Pow"} and child_shapes:
         reference = next((shape for shape in child_shapes if shape is not None), None)
         return AnalysisData(shape=reference)
 
@@ -49,7 +49,25 @@ def compute_analysis(egraph: EGraph, enode: ENode) -> AnalysisData:
             batch = lhs[:-1]
             return AnalysisData(shape=batch + (rhs[-1],))
 
-    if enode.op in {"Reshape", "Transpose", "Unsqueeze", "Squeeze", "Concat", "Slice"}:
+    if enode.op in {"Reshape", "Transpose", "Unsqueeze", "Squeeze", "Concat", "Slice", "Gather"}:
+        return AnalysisData()
+
+    if enode.op == "ReduceMean" and child_shapes and child_shapes[0] is not None:
+        return AnalysisData()
+
+    if enode.op == "Conv" and child_shapes:
+        return AnalysisData()
+
+    if enode.op in {"LayerNormalization", "BatchNormalization"} and child_shapes:
+        return AnalysisData(shape=child_shapes[0])
+
+    if enode.op == "Range":
+        return AnalysisData()
+
+    if enode.op == "Clip" and child_shapes:
+        return AnalysisData(shape=child_shapes[0])
+
+    if enode.op == "Gemm":
         return AnalysisData()
 
     return AnalysisData()
