@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 from ..egraph.egraph import EGraph
 from ..rules.base import RewriteRule, apply_rule
-from .cycle import will_create_cycle
+from .cycle import build_descendant_map, will_create_cycle
 from .matcher import find_all_matches
 
 logger = logging.getLogger(__name__)
@@ -67,10 +67,11 @@ def explore(
             break
 
         # 2. apply matches (with cycle filtering)
+        desc_map = build_descendant_map(egraph)
         applied = 0
         for match in matches:
             if will_create_cycle(
-                egraph, match.rule, match.eclass_id, match.subst
+                egraph, match.rule, match.eclass_id, match.subst, desc_map
             ):
                 continue
             result = apply_rule(
