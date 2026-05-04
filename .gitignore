@@ -38,5 +38,6 @@ artifacts/
 *.out
 *.synctex.gz
 
+paper/
 tensat/
 !tensat/ex.md

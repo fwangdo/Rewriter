@@ -33,38 +33,38 @@ def will_create_cycle(
     """Check if applying this rule with the given match would
     introduce a cycle in the e-graph.
 
-    Vanilla implementation: a cycle would be created if the target
-    pattern references an e-class that is an *ancestor* of match_cid.
-    Merging match_cid with a target that points to an ancestor would
-    create a circular dependency.
-
-    Equivalently: if match_cid is a descendant of any target variable
-    binding, applying the rule creates a cycle.
+    Uses depth-bounded BFS: only checks descendants up to MAX_DEPTH
+    hops from the target reference. This trades off completeness for
+    speed — deep cycles may slip through but will be caught during
+    extraction (which must produce a DAG).
     """
-    # Collect all e-class ids referenced in the target pattern
     target_refs = _collect_var_refs(rule.target, subst)
 
     match_canon = egraph.find(match_cid)
     for ref_cid in target_refs:
         ref_cid = egraph.find(ref_cid)
         if ref_cid == match_canon:
-            continue  # self-reference is ok
-        # Does ref_cid have match_cid as a descendant?
-        # i.e., is match_cid reachable from ref_cid?
-        # If so, merging would create a cycle.
-        if _is_descendant(egraph, ref_cid, match_canon):
+            continue
+        if _is_descendant_bounded(egraph, ref_cid, match_canon):
             return True
     return False
 
 
-def _is_descendant(
-    egraph: EGraph, ancestor: EClassId, target: EClassId
+_MAX_CYCLE_DEPTH = 5
+
+
+def _is_descendant_bounded(
+    egraph: EGraph, ancestor: EClassId, target: EClassId,
 ) -> bool:
-    """Check if ``target`` is a descendant of ``ancestor`` in the e-graph."""
+    """Bounded-depth descendant check."""
     visited: set[EClassId] = set()
-    stack = [ancestor]
+    # (cid, depth)
+    stack: list[tuple[EClassId, int]] = [(ancestor, 0)]
     while stack:
-        cid = egraph.find(stack.pop())
+        cid, depth = stack.pop()
+        if depth > _MAX_CYCLE_DEPTH:
+            continue
+        cid = egraph.find(cid)
         if cid in visited:
             continue
         visited.add(cid)
@@ -73,7 +73,7 @@ def _is_descendant(
                 child = egraph.find(child)
                 if child == target:
                     return True
-                stack.append(child)
+                stack.append((child, depth + 1))
     return False
 
 
