@@ -27,6 +27,47 @@ class IRGraph:
     inputs: tuple[str, ...] = ()
     outputs: tuple[str, ...] = ()
 
+    # for debugging. 
+    def __repr__(self) -> str:
+        assert self.root is not None
+
+        visited = {}  # memo: node_id -> sexpr string
+
+        def dfs(node_id: str) -> str:
+            # 이미 계산된 노드는 재사용 (DAG 공유 처리)
+            if node_id in visited:
+                return visited[node_id]
+
+            # initializer (constant)
+            if node_id in self.initializers:
+                val = self.initializers[node_id]
+                res = f"(Const {node_id})"
+                visited[node_id] = res
+                return res
+
+            # input node
+            if node_id in self.inputs:
+                res = f"(Input {node_id})"
+                visited[node_id] = res
+                return res
+
+            node = self.nodes[node_id]
+
+            # leaf (no inputs)
+            if not node.inputs:
+                res = f"({node.op})"
+                visited[node_id] = res
+                return res
+
+            # 일반 케이스
+            args = " ".join(dfs(inp) for inp in node.inputs)
+            res = f"({node.op} {args})"
+
+            visited[node_id] = res
+            return res
+
+        return dfs(self.root)
+
     # --- mutation helpers ---
 
     def add_node(self, node: IRNode) -> None:
@@ -64,3 +105,9 @@ class IRGraph:
         if self.root is None or self.root not in self.nodes:
             return ()
         return self.nodes[self.root].inputs
+
+    # --- utils 
+    def show_nodes(self) -> None:
+        for idx, node in self.nodes.items():
+            print(f'{idx} -> {node}')
+        return 

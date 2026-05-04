@@ -16,6 +16,8 @@ ENodeId = int
 EClassId = int
 
 
+# slots means field key in this class will be in __slots__
+# __slots__ means "fixed". no more members in this class. 
 @dataclass(frozen=True, slots=True)
 class ENode:
     """An operator node in the e-graph.
@@ -32,7 +34,13 @@ class ENode:
 
     def canonicalize(self, find: dict[EClassId, EClassId]) -> ENode:
         """Return a copy with children mapped through union-find."""
+        # the most important thing, we should represent children by EClassId
+        # canonicalized form is represented by EClassId. 
         new_children = tuple(find.get(c, c) for c in self.children)
         if new_children == self.children:
             return self
+
+        
+        # op and children are trivial. however, we didnt define attrs cleary yet 
+        # so, we have to go over whether canonicalize for attr is enough or not. 
         return ENode(op=self.op, children=new_children, attrs=self.attrs)

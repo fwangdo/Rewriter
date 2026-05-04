@@ -34,6 +34,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     model = onnx.shape_inference.infer_shapes(model)
     graph = model.graph
     ir = IRGraph()
+
+    # input, which is runtime value. 
     ir.inputs = tuple(inp.name for inp in graph.input if inp.name not in {init.name for init in graph.initializer})
     ir.outputs = tuple(o.name for o in graph.output)
 
@@ -93,7 +95,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
                 ))
             continue
 
-        output_id = live_outputs[0]
+        assert len(live_outputs) == 1, f'[ERROR]: live_outputs -> {live_outputs}'
+        output_id = live_outputs[0]  
         ir.add_node(IRNode(
             id=output_id,
             op=node.op_type,
@@ -108,6 +111,9 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     noop_id = "__noop_root__"
     ir.add_node(IRNode(id=noop_id, op=OP_NOOP, inputs=output_ids))
     ir.root = noop_id
+
+    # checking. 
+    # ir.show_nodes()
 
     return ir
 

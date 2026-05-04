@@ -53,6 +53,7 @@ def _ensure_compat():
 
 def _import_pass(module_name: str):
     """Import a pass module from onnx_rewrite.passes without triggering __init__."""
+    # this one stands for avoiding circular import. 
     _ensure_compat()
 
     fqn = f"onnx_rewrite.passes.{module_name}"

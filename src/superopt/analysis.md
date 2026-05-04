@@ -65,6 +65,65 @@ cleanup은 pre-pass에만 있는 것이 아니라 superopt 루프 안에도 있�
 - iterative cleanup: exploration 중 rebuild/normalization
 - post-cleanup: extraction 후 dangling/noop 제거
 
+## 연구 문제: Weight-Aware E-Graph Abstraction
+
+### 문제
+
+현재 e-graph는 두 가지 추상화 레벨을 암묵적으로 혼용하고 있다.
+
+1. **E-class 구분 (값 레벨)**: weight마다 고유한 e-class. `__name__` attr로 구분.
+2. **패턴 매칭 (구조 레벨)**: `?w`로 아무 weight나 바인딩. 구조만 보고 규칙 적용.
+3. **apply_fn (값 참조)**: 규칙 적용 시 `?w`로 바인딩된 e-class에서 실제 weight 값을 꺼내 새 weight를 계산.
+
+이 경계가 규칙마다 ad-hoc으로 결정되어 있다.
+
+### 코드에서의 발현
+
+`legalization.py`의 규칙들을 보면 세 가지 패턴이 공존한다:
+
+**Type A — 순수 구조 변환** (weight 불투명):
+```python
+# Clip(x, min, max) → Min(Max(x, min), max)
+source=PatternNode("Clip", (x, clip_min, clip_max))
+target=PatternNode("Min", (PatternNode("Max", (x, clip_min)), clip_max))
+```
+`?min`, `?max`가 weight인지 runtime인지 모름. 구조만 변환.
+
+**Type B — 구조 매칭 + 값 조건 검사** (weight 값을 check_fn에서 확인):
+```python
+# Pow(x, e) → Mul(x, x)  (단, e의 scalar_value ≈ 2.0)
+source=PatternNode("Pow", (x, e))
+check=_check_pow_exp(2.0)   # ?e의 scalar_value를 읽음
+```
+`?e`로 아무 것이나 매칭하지만, check_fn이 값을 꺼내본다.
+
+**Type C — 구조 매칭 + 값 기반 새 weight 합성** (weight 값을 읽고 변환):
+```python
+# BN(x, s, b, m, v) → Mul(x, scale_factor) + Add(bias_factor)
+source=PatternNode("BatchNormalization", (x, s, bn_b, bn_m, bn_v))
+apply_fn=_apply_bn_decompose  # ?s, ?bn_b, ?bn_m, ?bn_v의 실제 ndarray를 읽어 계산
+```
+`?s`, `?bn_b` 등은 패턴에서는 "아무 값"이지만, apply_fn은 실제 데이터를 꺼내서
+fused weight를 합성한다.
+
+### 스케일 문제
+
+weight마다 고유 e-class → 구조적으로 동일한 transformer layer N개가 전부 별개 e-class 트리로 복제된다. 모델이 커지면:
+- leaf e-class 수 = O(initializer 수)
+- 매 iteration 매칭 수 = O(layer 수 × 규칙 수)
+- max_nodes 한도에 도달하기 전에 의미 있는 최적화 탐색 불가
+
+mobilevit_xxs에서 이미 관찰됨: 417 노드 → 230k matches, 27k IR nodes, 175초.
+
+### 연구 방향
+
+"구조 레벨에서 e-graph를 공유하고, 추출 시 값 바인딩을 복원"할 수 있다면:
+- e-graph 크기가 layer 수에 무관하게 유지
+- 탐색 공간이 구조적 다양성에만 비례
+- 값 의존 규칙(Type C)은 추출 후 별도 패스로 분리 가능
+
+핵심 난제: 추출 시 각 위치에 어떤 weight를 매핑할지 결정하는 문제.
+
 ## 현실적인 난점
 
 ### 1. ONNX attribute 복잡도

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import onnx
+import sys 
 
 from .egraph.eclass import AnalysisData
 from .egraph.egraph import EGraph
@@ -38,12 +39,17 @@ def _hashable_attrs(
 
     numpy arrays are converted to (dtype, shape, bytes) tuples.
     """
+    # TODO: too simple, we need to check it up. 
     result = []
     for k, v in attrs:
         if isinstance(v, np.ndarray):
             result.append((k, (str(v.dtype), v.shape, v.tobytes())))
+        # TODO: we need to see all attrs. 
         else:
+            print(f'[attrs]: k -> {k} / {type(k)}, v -> {v} / {type(v)}')
             result.append((k, v))
+    
+    # sys.exit(1)
     return tuple(result)
 
 
@@ -65,8 +71,9 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     Returns the e-graph and the e-class id of the root node.
     """
     egraph = EGraph()
-    node_to_cid: dict[str, EClassId] = {}
+    node_to_cid: dict[str, EClassId] = {} # H  
 
+    # topological order. 
     for nid in ir.topo_order():
         node = ir.nodes[nid]
         children = tuple(node_to_cid[inp] for inp in node.inputs)
@@ -103,6 +110,8 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
 
     assert ir.root is not None
     root_cid = node_to_cid[ir.root]
+
+    # sys.exit(1)
     return egraph, root_cid
 
 
@@ -123,11 +132,13 @@ def superoptimize(
 
     # Pre-pass: lower deep-pattern ops (DecoderMask, Trilu) at ONNX level.
     from .compat import run_pre_passes
-    model = run_pre_passes(model)
+    model = run_pre_passes(model) # constant folding -> decoder mask -> trilu -> constant folding.  
 
     # ONNX → IR.,
-    # TODO: checkpoint1.
     ir = onnx_to_ir(model)
+    # print(ir)
+    # sys.exit(1)
+
     original_nodes = sum(
         1 for n in ir.nodes.values()
         # consider meaningful operation only 
