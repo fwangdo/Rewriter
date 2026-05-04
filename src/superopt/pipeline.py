@@ -49,7 +49,6 @@ def _hashable_attrs(
             print(f'[attrs]: k -> {k} / {type(k)}, v -> {v} / {type(v)}')
             result.append((k, v))
     
-    # sys.exit(1)
     return tuple(result)
 
 
@@ -85,9 +84,11 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
             attrs = (("__name__", nid),)
         # ENode must be hashable for memo dedup. Convert any numpy
         # arrays in attrs to bytes so the tuple is hashable.
+
+        # TODO: we have to handle this problem very clearly.
         attrs = _hashable_attrs(attrs)
         enode = ENode(op=node.op, children=children, attrs=attrs)
-        cid = egraph.add(enode)
+        cid = egraph.add(enode) # cid means e-class Id. 
         node_to_cid[nid] = cid
 
         # Propagate analysis data. add() may return an existing e-class, so
