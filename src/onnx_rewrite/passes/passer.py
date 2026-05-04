@@ -4,6 +4,7 @@ import onnx
 
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
+from .convert_matmul import ConvertMatmul
 from .eliminate_id import EliminateId
 from .rewrite_bn import RewriteBN
 from .rewrite_clip import RewriteClip
@@ -14,6 +15,7 @@ from .rewrite_gemm import RewriteGemm
 from .rewrite_layernorm import RewriteLayerNorm
 from .rewrite_meta_reshape import RewriteMetaReshape
 from .rewrite_neg import RewriteNeg
+from .rewrite_pow import RewritePow
 from .rewrite_range import RewriteRange
 from .rewrite_reshape_shape import RewriteReshapeShape
 from .rewrite_scatternd import RewriteScatterND
@@ -35,10 +37,12 @@ class Passer:
             RewriteMetaReshape(),
             RewriteReshapeShape(),
             RewriteLayerNorm(),
+            RewritePow(),
             RewriteBN(),
             RewriteNeg(),
             RewriteRange(),
             RewriteGemm(),
+            ConvertMatmul(),
             RewriteDecoderMask(),
             RewriteWhereMask(),
             RewriteTrilu(),
