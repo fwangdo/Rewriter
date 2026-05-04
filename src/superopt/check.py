@@ -1,6 +1,26 @@
 """Superopt smoke check: tinyllama_15m end-to-end.
 
 Each checkpoint prints a status line. Failures are caught and reported.
+
+Usage:
+    bash src/superopt/check.sh                       # defaults
+    bash src/superopt/check.sh -m PATH/model.onnx    # custom model
+    bash src/superopt/check.sh -o PATH/output.onnx   # custom output path
+
+Or directly:
+    python src/superopt/check.py [OPTIONS]
+
+Options:
+    -m, --model   Path to input ONNX model
+                  (default: benchmarks/onnx/nlp/tinyllama_15m/onnx/model.onnx)
+    -o, --output  Path for optimized ONNX output
+                  (default: artifacts/superopt/tinyllama_15m.onnx)
+
+Pipeline parameters (edit cp7_full_pipeline to change):
+    max_iter   Equality saturation iterations (default: 15).
+               Higher → more rules fire, slower. 3 is fast smoke, 15+ for full.
+    max_nodes  E-graph node budget (default: 50000).
+               Caps memory; increase for larger models.
 """
 
 from __future__ import annotations
@@ -125,7 +145,15 @@ def cp6_extraction(model_path: str):
 
 
 def cp7_full_pipeline(model_path: str, output_path: str):
-    """Full pipeline: ONNX → superopt → ONNX."""
+    """Full pipeline: ONNX → superopt → ONNX.
+
+    Tunable parameters:
+        max_iter  — equality saturation iterations. More iterations let
+                    legalization rules fire on deeper decompositions.
+                    3 = fast smoke test, 15 = full legalization.
+        max_nodes — e-graph node cap. Prevents OOM on large models.
+                    50k handles tinyllama_15m comfortably.
+    """
     from pathlib import Path
     from src.common.contracts import LLM_SUPPORTED_OPS
     from src.superopt.pipeline import superoptimize
@@ -133,7 +161,8 @@ def cp7_full_pipeline(model_path: str, output_path: str):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     result = superoptimize(
         model_path, output_path, LLM_SUPPORTED_OPS,
-        max_iter=15, max_nodes=50000,
+        max_iter=15,    # raise for deeper rule chains
+        max_nodes=50000,  # raise for larger models
     )
     print(f"  {result.original_nodes} → {result.optimized_nodes} nodes  legality_ok={result.legality_ok}")
 
