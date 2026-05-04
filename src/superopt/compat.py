@@ -16,13 +16,57 @@ from pathlib import Path
 import onnx
 
 
-def _import_pass(module_name: str):
-    """Import a pass module from onnx_rewrite.passes without triggering __init__."""
-    # Ensure src/ is on sys.path so 'common.contracts' resolves
+_compat_initialized = False
+
+
+def _ensure_compat():
+    """Register onnx_rewrite stub packages so relative imports work
+    without executing onnx_rewrite/__init__.py (which pulls in
+    rewrite_bn.py that requires Python 3.11 syntax).
+    """
+    global _compat_initialized
+    if _compat_initialized:
+        return
+    _compat_initialized = True
+
     src_dir = str(Path(__file__).resolve().parent.parent)
     if src_dir not in sys.path:
         sys.path.insert(0, src_dir)
-    return importlib.import_module(f"onnx_rewrite.passes.{module_name}")
+
+    ow_dir = Path(src_dir) / "onnx_rewrite"
+
+    # Register stub packages (empty __init__ modules) for the parent packages
+    # so that relative imports inside pass modules resolve correctly.
+    for pkg_name, pkg_path in [
+        ("onnx_rewrite", ow_dir),
+        ("onnx_rewrite.passes", ow_dir / "passes"),
+        ("onnx_rewrite.utils", ow_dir / "utils"),
+    ]:
+        if pkg_name not in sys.modules:
+            import types
+            stub = types.ModuleType(pkg_name)
+            stub.__path__ = [str(pkg_path)]
+            stub.__package__ = pkg_name
+            sys.modules[pkg_name] = stub
+
+
+def _import_pass(module_name: str):
+    """Import a pass module from onnx_rewrite.passes without triggering __init__."""
+    _ensure_compat()
+
+    fqn = f"onnx_rewrite.passes.{module_name}"
+    if fqn in sys.modules:
+        return sys.modules[fqn]
+
+    src_dir = str(Path(__file__).resolve().parent.parent)
+    file_path = Path(src_dir) / "onnx_rewrite" / "passes" / f"{module_name}.py"
+    spec = importlib.util.spec_from_file_location(fqn, file_path,
+                                                   submodule_search_locations=[])
+    mod = importlib.util.module_from_spec(spec)
+    mod.__package__ = "onnx_rewrite.passes"
+    sys.modules[fqn] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run_pre_passes(model: onnx.ModelProto) -> onnx.ModelProto:
