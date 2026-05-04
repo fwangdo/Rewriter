@@ -33,6 +33,8 @@ class EGraph:
         self._next_node_id: int = 0
         # pending merges for rebuild
         self._pending: list[EClassId] = []
+        # initializer data: weight node name → numpy array
+        self.initializers: dict[str, object] = {}
 
     # --- public API ---
 

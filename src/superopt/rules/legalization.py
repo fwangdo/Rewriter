@@ -186,6 +186,12 @@ def get_legalization_rules() -> list[RewriteRule]:
         target=PatternNode("Gemm", (a, w, b)),  # placeholder
         apply_fn=_apply_gemm_decompose,
     ))
+    rules.append(RewriteRule(
+        name="gemm_decompose_no_bias",
+        source=PatternNode("Gemm", (a, w)),
+        target=PatternNode("Gemm", (a, w)),  # placeholder
+        apply_fn=_apply_gemm_decompose_no_bias,
+    ))
 
     # --- F10: MatMul→Conv (static weight) ---
     rules.append(RewriteRule(
@@ -605,6 +611,44 @@ def _apply_gemm_decompose(
     return egraph.add(ENode("Add", (matmul_cid, b_cid)))
 
 
+def _apply_gemm_decompose_no_bias(
+    egraph: EGraph, match_cid: EClassId, subst: Subst,
+) -> EClassId:
+    """Gemm(a, w) → MatMul(a', w') for bias-less Gemm."""
+    a_cid = subst["?a"]
+    w_cid = subst["?w"]
+
+    trans_a = 0
+    trans_b = 0
+    alpha = 1.0
+    ec = egraph.eclass(match_cid)
+    for nid in ec.nodes:
+        enode = egraph.enode(nid)
+        if enode.op == "Gemm":
+            for k, v in enode.attrs:
+                if k == "transA":
+                    trans_a = int(v)
+                elif k == "transB":
+                    trans_b = int(v)
+                elif k == "alpha":
+                    alpha = float(v)
+            break
+
+    w_data = _get_synth_data(egraph, w_cid)
+    if w_data is None:
+        return match_cid
+
+    if trans_b:
+        w_data = w_data.T
+    w_data = (alpha * w_data).astype(np.float32)
+
+    if trans_a:
+        a_cid = egraph.add(ENode("Transpose", (a_cid,), attrs=(("perm", (1, 0)),)))
+
+    w_new_cid = _add_ndarray_constant(egraph, w_data, f"__gemm_w_{id(w_data)}")
+    return egraph.add(ENode("MatMul", (a_cid, w_new_cid)))
+
+
 # --- F10: MatMul → Conv ---
 
 def _check_matmul_static_weight(egraph: EGraph, subst: Subst) -> bool:
@@ -667,15 +711,24 @@ def _apply_matmul_to_conv(
 # --- Utility: extract initializer data from an eclass ---
 
 def _get_synth_data(egraph: EGraph, cid: EClassId) -> np.ndarray | None:
-    """Try to extract numpy array data from a weight eclass's __synth__ attr."""
+    """Try to extract numpy array data from a weight eclass.
+
+    Checks both __synth__ attrs (synthetic weights from apply_fn) and
+    egraph.initializers (original ONNX initializers).
+    """
     ec = egraph.eclass(cid)
     if not ec.data.is_constant:
         return None
     for nid in ec.nodes:
         enode = egraph.enode(nid)
         if enode.op == "weight":
+            # Check synthetic data first
             for k, v in enode.attrs:
                 if k == "__synth__":
                     dtype_str, shape, data = v
                     return np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape).copy()
+            # Check original initializers by __name__
+            for k, v in enode.attrs:
+                if k == "__name__" and v in egraph.initializers:
+                    return egraph.initializers[v].copy()
     return None

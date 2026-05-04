@@ -98,6 +98,9 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
             scalar_value=scalar_value,
         ))
 
+    # Store initializer data on e-graph so rules can access weight arrays.
+    egraph.initializers = dict(ir.initializers)
+
     assert ir.root is not None
     root_cid = node_to_cid[ir.root]
     return egraph, root_cid

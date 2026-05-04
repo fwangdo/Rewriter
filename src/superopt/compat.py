@@ -10,6 +10,7 @@ which has dependencies on 'common.contracts' import path.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import sys
 from pathlib import Path
 
