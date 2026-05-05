@@ -17,8 +17,9 @@ import logging
 from dataclasses import dataclass
 
 from ..egraph.egraph import EGraph
+from ..egraph.enode import EClassId
 from ..rules.base import RewriteRule, apply_rule
-from .cycle import build_descendant_map, will_create_cycle
+from .cycle import build_descendant_map, remove_cycles, will_create_cycle
 from .matcher import find_all_matches
 
 logger = logging.getLogger(__name__)
@@ -41,12 +42,18 @@ def explore(
     rules: list[RewriteRule],
     max_iter: int = 15,
     max_nodes: int = 50_000,
-) -> ExploreStats:
+    root_cid: EClassId | None = None,
+) -> tuple[ExploreStats, set[int]]:
     """Run the exploration phase on the e-graph.
 
-    Modifies ``egraph`` in place.  Returns statistics.
+    Modifies ``egraph`` in place.  Returns (statistics, blacklist).
+
+    Two-layer cycle filtering (Tensat Algorithm 2):
+    - Layer 1: pre-filter with descendant map (sound, not complete)
+    - Layer 2: post-process to blacklist e-nodes in remaining cycles
     """
     stats = ExploreStats()
+    blacklist: set[int] = set()
 
     for iteration in range(max_iter):
         stats.iterations = iteration + 1
@@ -66,8 +73,8 @@ def explore(
             logger.info("exploration saturated at iteration %d", iteration)
             break
 
-        # 2. apply matches (with cycle filtering)
-        desc_map = build_descendant_map(egraph)
+        # 2. Layer 1: pre-filter with descendant map
+        desc_map = build_descendant_map(egraph, blacklist)
         applied = 0
         for match in matches:
             if will_create_cycle(
@@ -85,15 +92,20 @@ def explore(
         # 3. rebuild
         egraph.rebuild()
 
+        # 4. Layer 2: post-process to remove any cycles that slipped through
+        if root_cid is not None:
+            remove_cycles(egraph, root_cid, blacklist)
+
         logger.debug(
-            "iter %d: matches=%d applied=%d eclasses=%d enodes=%d",
+            "iter %d: matches=%d applied=%d eclasses=%d enodes=%d blacklisted=%d",
             iteration,
             len(matches),
             applied,
             len(egraph),
             egraph.num_enodes,
+            len(blacklist),
         )
 
     stats.final_eclasses = len(egraph)
     stats.final_enodes = egraph.num_enodes
-    return stats
+    return stats, blacklist

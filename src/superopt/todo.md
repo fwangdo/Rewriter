@@ -88,8 +88,25 @@ Tensat은 egg의 **e-class analysis** feature를 사용해 각 e-class에 shape/
 valid rewrite가 e-graph에 cycle을 만들 수 있다.
 추출된 그래프는 DAG여야 하므로 cycle을 방지해야 한다.
 
-- **Vanilla**: 매 match마다 전체 e-graph를 순회해 cycle 여부 판별. `O(n_m · N)`.
-- **Efficient**: iteration 시작 시 descendant map을 한 번 계산. pre-filtering으로 대부분의 cycle을 빠르게 걸러내고, post-processing으로 남은 cycle을 DFS로 해결. 최대 2000x 빠름.
+Tensat은 **2-layer 전략** (Algorithm 2, Section 5.2)을 사용한다:
+
+**Layer 1 — Pre-filtering (sound, not complete)**:
+- iteration 시작 시 descendant map을 한 번 빌드. O(V+E).
+- 각 match에 대해 O(1) 체크: target의 입력 e-class가 match e-class를 descendant로 갖는지.
+- 대부분의 cycle을 빠르게 걸러내지만, 같은 iteration 내 이전 apply가 만든 새 관계
+  때문에 cycle이 생길 수 있다 (논문이 이 한계를 명시적으로 언급).
+
+**Layer 2 — Post-processing (completeness 보장)**:
+- iteration 끝에 root로부터 DFS로 실제 cycle을 탐지.
+- cycle 발견 시 가장 최근에 추가된 e-node(highest nid)를 **blacklist**.
+- cycle이 없어질 때까지 반복.
+- blacklist된 e-node는 extraction과 이후 descendant-map 빌드에서 제외.
+
+두 layer를 합치면 pre-filtering이 O(V+E)로 대부분 잡고,
+post-processing이 O(n_c · N)으로 나머지를 잡는다. 최대 2000x 빠름(Table 6).
+
+**주의**: Layer 1만 구현하면 soundness만 보장되고 completeness가 보장되지 않는다.
+Layer 2 없이는 cycle이 extraction 단계에서 ValueError를 일으킬 수 있다.
 
 ### 1.8 Cost Model
 
@@ -549,7 +566,9 @@ def superoptimize(
 [x] post-pass (ConstantFolding → ShapeInference → Cleanup)
 [x] compat.py: baseline pass를 __init__.py 우회하여 import
 [x] egraph.initializers: 원본 weight 데이터 접근 가능
-[x] efficient cycle filtering (descendant map precomputation, O(V+E) per iter)
+[x] efficient cycle filtering — Tensat Algorithm 2 완전 구현:
+      Layer 1: descendant map pre-filtering (O(V+E) per iter, sound)
+      Layer 2: DFS post-processing + blacklist (completeness 보장)
 
 ### Phase 8: ILP Extraction ✅ (기본 구현)
 
@@ -560,26 +579,31 @@ def superoptimize(
 
 ### Phase 9: 벤치마크 전체 통과 ← **현재 단계**
 
-**목표: 수동 baseline보다 명백히 좋은 graph를 superopt가 찾는다.**
+**목표: baseline(Passer)보다 명백히 좋은 graph를 superopt가 찾는다.**
 
-현재 상태:
-- tinyllama_15m (NLP): ✅ 동작. 765→683 IR nodes, 653 ONNX ops. 7/7 pass.
-  - 남은 illegal: Shape(32), ConstantOfShape(2), Less(1), Where(1) — baseline과 동일, irreducible.
-- mobilenetv2 (Vision): ⚠️ Clip 35개, Gemm 0개 남음.
-  - Clip→Min(Max) 분해는 되지만 Min/Max가 VISION_SUPPORTED_OPS에 없어 무의미.
-  - Gemm 분해는 동작 (gemm_decompose_no_bias 추가 후).
-  - **문제: contracts 갭** — Clip을 legal op만으로 분해할 경로가 없음.
-- mobilevit_xxs (Vision): ❌ e-graph 폭발. 417→27k IR nodes, 230k matches, 175초.
-  - **문제: 규칙 조합 폭발** — arithmetic/layout 규칙이 layer마다 독립 fire.
-- pythia_70m, smollm_135m, yolo26_nano: 미실험.
+#### 현재 비교 결과 (Baseline Passer vs Superopt, domain-specific contracts)
 
-**다음 할 일:**
+| Model | BL ops | BL illegal | SO ops | SO illegal | Δ ops | Δ illegal |
+|-------|--------|-----------|--------|-----------|-------|----------|
+| tinyllama_15m | 721 | 58 | 653 | 36 | **-68** | **-22** |
+| mobilenetv2 | 139 | 71 | 104 | 35 | **-35** | **-36** |
+| yolo26_nano | FAIL | - | 403 | 6 | - | - |
+| pythia_70m | 688 | 106 | 604 | 30 | **-84** | **-76** |
 
-[ ] mobilenetv2: Clip이 irreducible인지 확인. baseline도 Clip을 유지하는지 비교.
-[ ] mobilevit_xxs: e-graph 폭발 원인 분석. 어떤 규칙이 가장 많이 fire하는지 프로파일.
-[ ] yolo26_nano: 실험.
-[ ] NLP 모델 2개(pythia, smollm): 실험.
-[ ] 전체 결과 report.md 작성.
+- tinyllama: Superopt가 Unsqueeze(16) 제거, Shape 7개 추가 제거.
+- mobilenetv2: Baseline은 Clip→Min+Max 분해하여 illegal 71개. Superopt는 Clip 유지로 35개.
+- yolo26_nano: Baseline FAIL (ReduceMean attrs). Superopt만 동작.
+- pythia_70m: Superopt가 Conv(25)+Erf(6)+Unsqueeze(51) 제거. 106→30.
+- mobilevit_xxs: ❌ e-graph 폭발 (미해결).
+- smollm_135m: ❌ protobuf 2GB 제한 (미해결).
+
+#### 다음 할 일
+
+[ ] mobilevit_xxs: e-graph 폭발 해결. 규칙별 match 수 프로파일.
+[ ] smollm_135m: IR node 폭발 원인 분석.
+[ ] 남은 illegal ops(Shape, ConstantOfShape 등) 제거 가능성 분석.
+[ ] correctness 검증: ORT inference 비교 (check.py 확장).
+[ ] paper evaluation section 업데이트.
 
 ---
 

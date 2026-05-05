@@ -20,6 +20,7 @@ def extract_greedy(
     egraph: EGraph,
     root_cid: EClassId,
     cost_model: CostModel,
+    blacklist: set[int] | None = None,
 ) -> IRGraph:
     """Extract the lowest-cost program from *egraph* rooted at *root_cid*.
 
@@ -28,7 +29,12 @@ def extract_greedy(
     2. For each e-class pick the best (legal, lowest-cost) e-node.
     3. If no legal e-node exists, fall back to the lowest-cost one.
     4. Build an IRGraph from chosen e-nodes.
+
+    Blacklisted e-node ids (from cycle post-processing) are skipped.
     """
+    if blacklist is None:
+        blacklist = set()
+
     # Map each canonical e-class id → chosen e-node.
     best: dict[EClassId, tuple[float, ENode]] = {}
 
@@ -50,20 +56,25 @@ def extract_greedy(
     _dfs_postorder(egraph.find(root_cid))
 
     for cid in reachable:
-        enodes = egraph.eclass_nodes(cid)
+        ec = egraph.eclass(cid)
         best_legal: tuple[float, ENode] | None = None
         best_any: tuple[float, ENode] | None = None
 
-        for enode in enodes:
+        for nid in ec.nodes:
+            if nid in blacklist:
+                continue
+            enode = egraph.enode(nid)
             # Total cost = node cost + sum of children costs.
             child_cost = 0.0
+            extractable = True
             for child in enode.children:
                 child_cid = egraph.find(child)
                 if child_cid not in best:
-                    raise ValueError(
-                        f"cannot extract e-class {cid}: child {child_cid} has no cost"
-                    )
+                    extractable = False
+                    break
                 child_cost += best[child_cid][0]
+            if not extractable:
+                continue
             total = cost_model.node_cost(enode) + child_cost
 
             if best_any is None or total < best_any[0]:

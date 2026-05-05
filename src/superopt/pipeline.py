@@ -162,14 +162,21 @@ def superoptimize(
         if _RULE_TARGET_OPS.get(r.name, None) is None
         or _RULE_TARGET_OPS[r.name] in supported_ops
     ]
-    explore_stats = explore(egraph, legalization_rules, max_iter=max_iter, max_nodes=max_nodes)
+    explore_stats, blacklist = explore(
+        egraph, legalization_rules,
+        max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
+    )
 
     # Phase 2: Arithmetic/layout/fusion optimization (bounded).
     # These rules (commute, assoc, etc.) can explode on large models,
     # so we run them with a smaller iteration budget.
     opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
     opt_iter = min(3, max_iter)
-    opt_stats = explore(egraph, opt_rules, max_iter=opt_iter, max_nodes=max_nodes)
+    opt_stats, opt_blacklist = explore(
+        egraph, opt_rules,
+        max_iter=opt_iter, max_nodes=max_nodes, root_cid=root_cid,
+    )
+    blacklist |= opt_blacklist
     explore_stats.iterations += opt_stats.iterations
     explore_stats.total_matches += opt_stats.total_matches
     explore_stats.total_applied += opt_stats.total_applied
@@ -177,9 +184,9 @@ def superoptimize(
     explore_stats.final_enodes = opt_stats.final_enodes
 
     # Extract best program.
-    # checkpoint 5. 
+    # checkpoint 5.
     cost_model = CostModel(supported_ops)
-    opt_ir = extract_greedy(egraph, root_cid, cost_model) # selection. 
+    opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
 
     # Carry over only initializer leaves that survived extraction.
     # Synthetic weights (created by legalization apply_fn) carry a
