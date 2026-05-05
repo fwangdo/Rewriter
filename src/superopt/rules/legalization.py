@@ -202,6 +202,15 @@ def get_legalization_rules() -> list[RewriteRule]:
         apply_fn=_apply_matmul_to_conv,
     ))
 
+    # --- F11: Erf → Tanh approximation ---
+    # Erf(x) ≈ Tanh(x * 0.7978845608 * (1 + 0.044715 * x²))
+    rules.append(RewriteRule(
+        name="erf_to_tanh",
+        source=PatternNode("Erf", (x,)),
+        target=PatternNode("Erf", (x,)),  # placeholder
+        apply_fn=_apply_erf_to_tanh,
+    ))
+
     return rules
 
 
@@ -706,6 +715,33 @@ def _apply_matmul_to_conv(
         rs2_shape = np.array([-1, N], dtype=np.int64)
         rs2_cid = _add_ndarray_constant(egraph, rs2_shape, f"__reshape_n1_{N}", dtype=7)
         return egraph.add(ENode("Reshape", (t2_cid, rs2_cid)))
+
+
+# --- F11: Erf → Tanh approximation ---
+
+def _apply_erf_to_tanh(
+    egraph: EGraph, match_cid: EClassId, subst: Subst,
+) -> EClassId:
+    """Erf(x) ≈ Tanh(x * 0.7978845608 * (1 + 0.044715 * x²))"""
+    x_cid = subst["?x"]
+
+    # Constants
+    c1_cid = _add_scalar_constant(egraph, 0.044715, "__erf_c1")
+    c2_cid = _add_scalar_constant(egraph, 0.7978845608, "__erf_c2")
+    one_cid = _add_scalar_constant(egraph, 1.0, "__erf_one")
+
+    # x² = Mul(x, x)
+    x2_cid = egraph.add(ENode("Mul", (x_cid, x_cid)))
+    # 0.044715 * x²
+    cx2_cid = egraph.add(ENode("Mul", (c1_cid, x2_cid)))
+    # 1 + 0.044715 * x²
+    inner_cid = egraph.add(ENode("Add", (one_cid, cx2_cid)))
+    # x * 0.7978845608
+    xc_cid = egraph.add(ENode("Mul", (x_cid, c2_cid)))
+    # x * 0.7978845608 * (1 + 0.044715 * x²)
+    arg_cid = egraph.add(ENode("Mul", (xc_cid, inner_cid)))
+    # Tanh(...)
+    return egraph.add(ENode("Tanh", (arg_cid,)))
 
 
 # --- Utility: extract initializer data from an eclass ---

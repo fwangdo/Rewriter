@@ -70,7 +70,7 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     Returns the e-graph and the e-class id of the root node.
     """
     egraph = EGraph()
-    node_to_cid: dict[str, EClassId] = {} # H  
+    node_to_cid: dict[str, EClassId] = {} 
 
     # topological order. 
     for nid in ir.topo_order():
@@ -89,7 +89,7 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
         attrs = _hashable_attrs(attrs)
         enode = ENode(op=node.op, children=children, attrs=attrs)
         cid = egraph.add(enode) # cid means e-class Id. 
-        node_to_cid[nid] = cid
+        node_to_cid[nid] = cid 
 
         # Propagate analysis data. add() may return an existing e-class, so
         # join instead of overwriting facts from an equivalent node.
@@ -150,20 +150,31 @@ def superoptimize(
     # TODO: checkpoint 2. 
     egraph, root_cid = ir_to_egraph(ir)
 
-    # Gather all rewrite rules.
-    # checkpoint 3. 
-    rules = (
-        get_arithmetic_rules()
-        + get_layout_rules()
-        + get_fusion_rules()
-        + get_legalization_rules()
-    )
-    
-    # setup is done. 
+    # Phase 1: Legalization (decompose unsupported ops).
+    # These rules are targeted and don't cause combinatorial explosion.
+    # Filter out rules that produce ops illegal for this target.
+    _RULE_TARGET_OPS = {
+        "matmul_to_conv": "Conv",
+        "clip_decompose": "Min",
+    }
+    legalization_rules = [
+        r for r in get_legalization_rules()
+        if _RULE_TARGET_OPS.get(r.name, None) is None
+        or _RULE_TARGET_OPS[r.name] in supported_ops
+    ]
+    explore_stats = explore(egraph, legalization_rules, max_iter=max_iter, max_nodes=max_nodes)
 
-    # Explore (equality saturation).
-    # checkpoint 4. 
-    explore_stats = explore(egraph, rules, max_iter=max_iter, max_nodes=max_nodes)
+    # Phase 2: Arithmetic/layout/fusion optimization (bounded).
+    # These rules (commute, assoc, etc.) can explode on large models,
+    # so we run them with a smaller iteration budget.
+    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
+    opt_iter = min(3, max_iter)
+    opt_stats = explore(egraph, opt_rules, max_iter=opt_iter, max_nodes=max_nodes)
+    explore_stats.iterations += opt_stats.iterations
+    explore_stats.total_matches += opt_stats.total_matches
+    explore_stats.total_applied += opt_stats.total_applied
+    explore_stats.final_eclasses = opt_stats.final_eclasses
+    explore_stats.final_enodes = opt_stats.final_enodes
 
     # Extract best program.
     # checkpoint 5. 

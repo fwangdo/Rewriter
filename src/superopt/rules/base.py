@@ -60,9 +60,15 @@ def apply_rule(
 
     if rule.apply_fn is not None:
         target_cid = rule.apply_fn(egraph, match_cid, subst)
-        return egraph.merge(match_cid, target_cid)
+    else:
+        target_cid = _instantiate(egraph, rule.target, subst)
 
-    target_cid = _instantiate(egraph, rule.target, subst)
+    # Skip merge if shapes are incompatible.
+    s1 = egraph.eclass(match_cid).data.shape
+    s2 = egraph.eclass(target_cid).data.shape
+    if s1 is not None and s2 is not None and s1 != s2:
+        return None
+
     return egraph.merge(match_cid, target_cid)
 
 

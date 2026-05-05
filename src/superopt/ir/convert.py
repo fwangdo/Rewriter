@@ -134,7 +134,27 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     for name, arr in ir.initializers.items():
         initializers.append(numpy_helper.from_array(arr, name=name))
 
-    # Build nodes in topological order, skipping leaf/noop ops.
+    # Build proj→parent output name mapping.
+    # Proj nodes reference a multi-output parent and select one output by index.
+    # We resolve each proj id to the parent's actual ONNX output name.
+    proj_remap: dict[str, str] = {}
+    for nid in ir.topo_order():
+        node = ir.nodes[nid]
+        if node.op == OP_PROJ:
+            parent_id = node.inputs[0]
+            parent = ir.nodes[parent_id]
+            parent_attrs = dict(parent.attrs_dict)
+            parent_outputs = parent_attrs.get(_MULTI_OUTPUTS_ATTR)
+            if parent_outputs:
+                idx = dict(node.attrs).get("index", 0)
+                proj_remap[nid] = parent_outputs[idx]
+            else:
+                proj_remap[nid] = parent_id
+
+    def _resolve_inputs(inputs: tuple[str, ...]) -> list[str]:
+        return [proj_remap.get(inp, inp) for inp in inputs]
+
+    # Build nodes in topological order, skipping leaf/noop/proj ops.
     nodes: list[onnx.NodeProto] = []
     for nid in ir.topo_order():
         node = ir.nodes[nid]
@@ -146,7 +166,7 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
             outputs = list(attrs.pop(_MULTI_OUTPUTS_ATTR))
         onnx_node = onnx.helper.make_node(
             node.op,
-            inputs=list(node.inputs),
+            inputs=_resolve_inputs(node.inputs),
             outputs=outputs,
             **_attrs_to_kwargs(attrs),
         )
