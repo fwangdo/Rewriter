@@ -577,33 +577,46 @@ def superoptimize(
 [ ] legality를 ILP hard constraint로 추가 (현재 greedy만 legality-aware)
 [ ] greedy vs ILP 비교 실험
 
-### Phase 9: 벤치마크 전체 통과 ← **현재 단계**
+### Phase 9: ORT latency-first extraction ← **현재 단계**
 
-**목표: baseline(Passer)보다 명백히 좋은 graph를 superopt가 찾는다.**
+**변경된 목표**: supported/unsupported op 구분은 extraction constraint로 쓰지 않는다.
+모든 ONNX op를 허용하고, ONNX Runtime profiling에서 측정한 op별 평균 latency
+cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한다.
 
-#### 현재 비교 결과 (Baseline Passer vs Superopt, domain-specific contracts)
+최종 성공 기준은 아래 순서다.
 
-| Model | BL ops | BL illegal | SO ops | SO illegal | Δ ops | Δ illegal |
-|-------|--------|-----------|--------|-----------|-------|----------|
-| tinyllama_15m | 721 | 58 | 653 | 36 | **-68** | **-22** |
-| mobilenetv2 | 139 | 71 | 104 | 35 | **-35** | **-36** |
-| yolo26_nano | FAIL | - | 403 | 6 | - | - |
-| pythia_70m | 688 | 106 | 604 | 30 | **-84** | **-76** |
+1. superopt output이 ORT에서 로드된다.
+2. 원본 모델과 superopt output이 correctness tolerance 안에 든다.
+3. end-to-end ORT CPU latency가 원본 또는 ORT optimizer 결과보다 개선된다.
 
-- tinyllama: Superopt가 Unsqueeze(16) 제거, Shape 7개 추가 제거.
-- mobilenetv2: Baseline은 Clip→Min+Max 분해하여 illegal 71개. Superopt는 Clip 유지로 35개.
-- yolo26_nano: Baseline FAIL (ReduceMean attrs). Superopt만 동작.
-- pythia_70m: Superopt가 Conv(25)+Erf(6)+Unsqueeze(51) 제거. 106→30.
-- mobilevit_xxs: ❌ e-graph 폭발 (미해결).
-- smollm_135m: ❌ protobuf 2GB 제한 (미해결).
+#### 현재 확인 결과
+
+| Model | 상태 | 확인 내용 |
+|-------|------|-----------|
+| mobilenetv2 | correctness PASS | 기존 latency 산출물과 재생성 산출물 모두 `max_abs_diff ~= 1e-15` |
+| tinyllama_15m | correctness PASS after fix | invalid Reshape shape 6개를 제거했고, 재생성 결과 `max_abs_diff=3.17e-05` |
+| pythia_70m | old artifact FAIL | 기존 산출물은 `Reshape` target에 `-1`이 여러 개 있어 ORT load 실패. tinyllama와 같은 원인으로 보임 |
+| yolo26_nano | old artifact FAIL | 기존 산출물은 `Resize` optional input 복원 오류로 ORT load 실패 |
+| mobilevit_xxs | unresolved | e-graph 폭발로 산출/검증 미완료 |
+| smollm_135m | unresolved | protobuf 2GB 제한으로 산출/검증 미완료 |
+
+#### 이번에 확인한 correctness blocker
+
+- `Squeeze/Unsqueeze -> Reshape` legalization이 shape inference의 unknown dim을
+  `-1`로 그대로 materialize했다.
+- ONNX `Reshape` shape tensor는 `-1`을 최대 하나만 허용한다.
+- `tinyllama_15m` old artifact에는 `[-1, 1, 1, -1]`, `[1, 1, -1, -1]`
+  같은 invalid shape가 있었다.
+- 해당 rule은 unknown dim이 2개 이상인 target shape에서는 적용하지 않도록 막았다.
 
 #### 다음 할 일
 
-[ ] mobilevit_xxs: e-graph 폭발 해결. 규칙별 match 수 프로파일.
-[ ] smollm_135m: IR node 폭발 원인 분석.
-[ ] 남은 illegal ops(Shape, ConstantOfShape 등) 제거 가능성 분석.
-[ ] correctness 검증: ORT inference 비교 (check.py 확장).
-[ ] paper evaluation section 업데이트.
+[ ] pythia_70m 재생성 후 ORT correctness 확인
+[ ] yolo26_nano `Resize` optional input round-trip 복원 수정
+[ ] mobilevit_xxs: e-graph 폭발 해결. 규칙별 match 수 프로파일
+[ ] smollm_135m: protobuf 2GB 제한 / IR node 폭발 원인 분석
+[ ] latency benchmark를 correctness gate 이후에만 집계하도록 정리
+[ ] paper evaluation section을 latency-first 목표에 맞게 업데이트
 
 ---
 

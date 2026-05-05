@@ -116,7 +116,7 @@ def cp5_exploration(model_path: str):
 
 
 def cp6_extraction(model_path: str):
-    """Greedy extraction (legality-aware)."""
+    """Greedy extraction with profiled latency costs."""
     import onnx
     from src.superopt.ir.convert import onnx_to_ir
     from src.superopt.pipeline import ir_to_egraph
@@ -126,7 +126,6 @@ def cp6_extraction(model_path: str):
     from src.superopt.rules.arithmetic import get_arithmetic_rules
     from src.superopt.rules.layout import get_layout_rules
     from src.superopt.rules.fusion import get_fusion_rules
-    from src.common.contracts import LLM_SUPPORTED_OPS
 
     model = onnx.load(model_path)
     ir = onnx_to_ir(model)
@@ -134,14 +133,12 @@ def cp6_extraction(model_path: str):
     rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
     stats = explore(egraph, rules, max_iter=3, max_nodes=10000)
 
-    cost_model = CostModel(LLM_SUPPORTED_OPS)
+    cost_model = CostModel()
     opt_ir = extract_greedy(egraph, root, cost_model)
     skip = {"input", "weight", "noop", "proj"}
     n_ops = sum(1 for n in opt_ir.nodes.values() if n.op not in skip)
     ops = sorted(set(n.op for n in opt_ir.nodes.values() if n.op not in skip))
-    illegal = [op for op in ops if op not in LLM_SUPPORTED_OPS]
     print(f"  extracted_ops={n_ops}  op_types={ops}")
-    print(f"  illegal_ops={illegal}")
 
 
 def cp7_full_pipeline(model_path: str, output_path: str):
@@ -155,24 +152,22 @@ def cp7_full_pipeline(model_path: str, output_path: str):
                     50k handles tinyllama_15m comfortably.
     """
     from pathlib import Path
-    from src.common.contracts import LLM_SUPPORTED_OPS
     from src.superopt.pipeline import superoptimize
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     result = superoptimize(
-        model_path, output_path, LLM_SUPPORTED_OPS,
+        model_path, output_path,
         max_iter=15,    # raise for deeper rule chains
         max_nodes=50000,  # raise for larger models
     )
-    print(f"  {result.original_nodes} → {result.optimized_nodes} nodes  legality_ok={result.legality_ok}")
+    print(f"  {result.original_nodes} → {result.optimized_nodes} nodes")
 
-    # Compare with baseline
+    # Report extracted op mix.
     import onnx as _onnx
     from collections import Counter as _Counter
     opt_model = _onnx.load(output_path)
     ops = _Counter(n.op_type for n in opt_model.graph.node)
-    illegal = {op: cnt for op, cnt in ops.items() if op not in LLM_SUPPORTED_OPS}
-    print(f"  total_onnx_ops={sum(ops.values())}  illegal={dict(sorted(illegal.items()))}")
+    print(f"  total_onnx_ops={sum(ops.values())}  ops={dict(sorted(ops.items()))}")
 
 
 def main():
@@ -194,7 +189,7 @@ def main():
     results.append(run_checkpoint("[3/7] Load basic rewrite rules...", lambda: cp3_basic_rules()))
     results.append(run_checkpoint("[4/7] Load legalization rules...", lambda: cp4_legalization_rules()))
     results.append(run_checkpoint("[5/7] Exploration (equality saturation, basic rules only)...", lambda: cp5_exploration(args.model)))
-    results.append(run_checkpoint("[6/7] Greedy extraction (legality-aware)...", lambda: cp6_extraction(args.model)))
+    results.append(run_checkpoint("[6/7] Greedy extraction (latency-cost)...", lambda: cp6_extraction(args.model)))
     results.append(run_checkpoint("[7/7] Full pipeline: ONNX → superopt → ONNX...", lambda: cp7_full_pipeline(args.model, args.output)))
 
     passed = sum(results)

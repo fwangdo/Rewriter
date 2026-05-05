@@ -255,6 +255,11 @@ def _add_shape_constant(egraph: EGraph, shape: tuple[int, ...]) -> EClassId:
     return cid
 
 
+def _is_valid_reshape_template(shape: tuple[int, ...]) -> bool:
+    """ONNX Reshape permits at most one inferred dimension (-1)."""
+    return sum(1 for dim in shape if dim == -1) <= 1
+
+
 def _add_ndarray_constant(egraph: EGraph, arr: np.ndarray, name: str, dtype: int = 1) -> EClassId:
     """Add an arbitrary ndarray constant to the egraph."""
     arr = np.ascontiguousarray(arr)
@@ -302,6 +307,8 @@ def _apply_squeeze_to_reshape(
     target_shape = egraph.eclass(match_cid).data.shape
     if target_shape is None:
         return match_cid
+    if not _is_valid_reshape_template(target_shape):
+        return match_cid
     shape_cid = _add_shape_constant(egraph, target_shape)
     reshape_enode = ENode("Reshape", (x_cid, shape_cid))
     return egraph.add(reshape_enode)
@@ -314,6 +321,8 @@ def _apply_unsqueeze_to_reshape(
     x_cid = subst["?x"]
     target_shape = egraph.eclass(match_cid).data.shape
     if target_shape is None:
+        return match_cid
+    if not _is_valid_reshape_template(target_shape):
         return match_cid
     shape_cid = _add_shape_constant(egraph, target_shape)
     reshape_enode = ENode("Reshape", (x_cid, shape_cid))

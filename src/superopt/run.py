@@ -53,10 +53,9 @@ def main() -> None:
     )
 
     logger.info(
-        "done: %d → %d nodes (legality_ok=%s)",
+        "done: %d → %d nodes",
         result.original_nodes,
         result.optimized_nodes,
-        result.legality_ok,
     )
 
 

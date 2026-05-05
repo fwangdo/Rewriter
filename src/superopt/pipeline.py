@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import onnx
-import sys 
 
 from .egraph.eclass import AnalysisData
 from .egraph.egraph import EGraph
@@ -46,7 +45,6 @@ def _hashable_attrs(
             result.append((k, (str(v.dtype), v.shape, v.tobytes())))
         # TODO: we need to see all attrs. 
         else:
-            print(f'[attrs]: k -> {k} / {type(k)}, v -> {v} / {type(v)}')
             result.append((k, v))
     
     return tuple(result)
@@ -61,7 +59,6 @@ class SuperoptResult:
     original_nodes: int = 0
     optimized_nodes: int = 0
     explore_stats: ExploreStats = field(default_factory=ExploreStats)
-    legality_ok: bool = True
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
@@ -119,11 +116,15 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
 def superoptimize(
     input_path: str | Path,
     output_path: str | Path,
-    supported_ops: frozenset[str],
+    supported_ops: frozenset[str] | None = None,
     max_iter: int = 15,
     max_nodes: int = 50_000,
 ) -> SuperoptResult:
-    """Run the full superoptimization pipeline on an ONNX model."""
+    """Run the full superoptimization pipeline on an ONNX model.
+
+    All ONNX ops are extractable. The extraction objective is the
+    profiled ONNX Runtime latency cost model.
+    """
     input_path = str(input_path)
     output_path = str(output_path)
 
@@ -150,18 +151,9 @@ def superoptimize(
     # TODO: checkpoint 2. 
     egraph, root_cid = ir_to_egraph(ir)
 
-    # Phase 1: Legalization (decompose unsupported ops).
+    # Phase 1: Legalization (decompose complex ops into simpler ones).
     # These rules are targeted and don't cause combinatorial explosion.
-    # Filter out rules that produce ops illegal for this target.
-    _RULE_TARGET_OPS = {
-        "matmul_to_conv": "Conv",
-        "clip_decompose": "Min",
-    }
-    legalization_rules = [
-        r for r in get_legalization_rules()
-        if _RULE_TARGET_OPS.get(r.name, None) is None
-        or _RULE_TARGET_OPS[r.name] in supported_ops
-    ]
+    legalization_rules = get_legalization_rules()
     explore_stats, blacklist = explore(
         egraph, legalization_rules,
         max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
@@ -183,9 +175,8 @@ def superoptimize(
     explore_stats.final_eclasses = opt_stats.final_eclasses
     explore_stats.final_enodes = opt_stats.final_enodes
 
-    # Extract best program.
-    # checkpoint 5.
-    cost_model = CostModel(supported_ops)
+    # Extract best program using profiled latency cost model.
+    cost_model = CostModel()
     opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
 
     # Carry over only initializer leaves that survived extraction.
@@ -221,24 +212,10 @@ def superoptimize(
         if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
-    # Check legality.
-    unsupported = {
-        n.op for n in opt_ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
-        and n.op not in supported_ops
-    }
-    legality_ok = len(unsupported) == 0
-    if unsupported:
-        logger.warning(
-            "legality violation: output contains unsupported ops %s",
-            unsupported,
-        )
-
     return SuperoptResult(
         input_path=input_path,
         output_path=output_path,
         original_nodes=original_nodes,
         optimized_nodes=optimized_nodes,
         explore_stats=explore_stats,
-        legality_ok=legality_ok,
     )

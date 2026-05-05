@@ -80,7 +80,6 @@ def main(argv: list[str] | None = None) -> None:
         "output": result.output_path,
         "original_nodes": result.original_nodes,
         "optimized_nodes": result.optimized_nodes,
-        "legality_ok": result.legality_ok,
         "explore": {
             "iterations": result.explore_stats.iterations,
             "matches": result.explore_stats.total_matches,
