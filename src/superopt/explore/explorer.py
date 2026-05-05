@@ -1,4 +1,7 @@
-"""Exploration phase: grow the e-graph by applying rewrite rules.
+"""Legacy exploration phase for the hand-rolled e-graph.
+
+The main superopt pipeline no longer calls this module.  New optimization
+runs use ``superopt.backends.egglog.EgglogBackend``.
 
 This is the main loop of equality saturation.
 Each iteration:

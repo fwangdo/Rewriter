@@ -1,4 +1,10 @@
-"""E-graph: the core equality saturation data structure.
+"""Legacy hand-rolled e-graph data structure.
+
+The main superopt pipeline no longer uses this implementation.  It now uses
+``superopt.backends.egglog`` for equality saturation and extraction.
+
+This module is intentionally kept for reference and for code that still uses
+the old Pattern/RewriteRule representation during the egglog migration.
 
 Implements union-find based e-class management, e-node deduplication,
 and the rebuild operation that restores invariants after merges.

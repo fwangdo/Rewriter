@@ -1,4 +1,7 @@
-"""Greedy bottom-up extraction from an e-graph.
+"""Legacy greedy extraction for the hand-rolled e-graph.
+
+The main superopt pipeline no longer uses this extractor.  Egglog extraction
+lives in ``superopt.backends.egglog``.
 
 Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 """

@@ -63,7 +63,11 @@ class SuperoptResult:
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
-    """Convert an IRGraph into an e-graph.
+    """Convert an IRGraph into the legacy hand-rolled e-graph.
+
+    The main pipeline no longer calls this path; egglog is used instead.
+    Keep this only while old rewrite/check/apply_fn helpers still depend on
+    the hand-rolled e-graph types.
 
     Returns the e-graph and the e-class id of the root node.
     """

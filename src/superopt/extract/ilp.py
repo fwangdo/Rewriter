@@ -1,4 +1,7 @@
-"""ILP-based optimal extraction from an e-graph.
+"""Legacy ILP extraction for the hand-rolled e-graph.
+
+The main superopt pipeline no longer uses this extractor.  It is kept as a
+reference implementation while extraction logic moves to egglog.
 
 Formulates extraction as an integer linear program:
 - Variables: t_c ∈ {0,1} for each e-class (active), x_n ∈ {0,1} for each e-node (selected)

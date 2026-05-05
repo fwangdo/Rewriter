@@ -529,6 +529,10 @@ def superoptimize(
 [x] `AnalysisData` 및 e-class analysis 구현 (`egraph/analysis.py`)
 [x] `ir_to_egraph()`: IRGraph → EGraph 초기화 (`pipeline.py`)
 
+Note: Phase 2의 자체 e-graph 구현은 현재 main pipeline에서 사용하지 않는다.
+egglog 전환 후에는 legacy/reference 코드이며, rule migration이 끝날 때까지
+타입 호환을 위해 보존한다.
+
 ### Phase 3: Pattern Matching + Rules ✅ (기본 골격)
 
 [x] `Pattern`, `PatternVar`, `PatternNode` 정의 (`egraph/pattern.py`)
@@ -544,7 +548,8 @@ def superoptimize(
 [x] exploration 메인 루프 구현 (`explore/explorer.py`)
 [x] saturation 판정 구현
 [x] `ExploreStats` 리포팅
-[x] `check.sh` smoke test (tinyllama_15m) — steps 1-7 pass
+[x] legacy `check.sh` smoke test (tinyllama_15m) — steps 1-7 pass
+    - 현재는 삭제됨. egglog main path를 검증하지 않는 outdated runner였음.
 
 ### Phase 5: Extraction ✅
 
@@ -556,7 +561,8 @@ def superoptimize(
 ### Phase 6: End-to-End Pipeline ✅
 
 [x] `pipeline.py`: ONNX → superopt → ONNX 전체 흐름 연결
-[x] `tinyllama_15m`에서 end-to-end 실행 (`check.sh` 7단계 pass)
+[x] `tinyllama_15m`에서 end-to-end 실행 (legacy `check.sh` 7단계 pass)
+    - 현재는 egglog backend path로 전환됨.
 
 ### Phase 7: Rule 확장 ✅
 
@@ -683,6 +689,20 @@ Correctness 기준: Gawee 동일 — `np.allclose(orig, opt, atol, rtol=1e-4)`
 [x] candidate별 ORT load / correctness / latency validation loop 구��
 [x] latency benchmark를 correctness gate 이후에만 집계하도록 정리 (bench_latency.py)
 [x] ORT profiling 기반 op type 평균 cost table 구축 (profile_ops.py → op_cost_table.json)
+[x] hand-rolled e-graph main pipeline을 egglog backend로 교체
+    (`src/superopt/backends/egglog.py`)
+[x] egglog backend round-trip smoke 확인
+    - model: `mobilenetv2`
+    - rule iter: 0
+    - original nodes: 100
+    - extracted nodes: 100
+    - ORT correctness: PASS, max_abs_diff=0.0
+    - latency: original 약 11.24ms, egglog candidate 약 11.31ms
+[x] egglog backend + pure pattern rewrite 1 iteration smoke 확인
+    - model: `mobilenetv2`
+    - extracted nodes: 100
+    - ORT correctness: PASS, max_abs_diff=0.0
+    - latency: original 약 11.24ms, egglog candidate 약 11.31ms
 
 **블로커: superopt가 원본보다 느린 근본 원인**
 
@@ -704,6 +724,55 @@ Correctness 기준: Gawee 동일 — `np.allclose(orig, opt, atol, rtol=1e-4)`
 [ ] tinyllama/pythia 입력 범위 수정 (input_ids를 vocab 범위 내로)
 [ ] yolo26_nano correctness 실패 원인 조사 (Resize op 관련)
 [ ] paper evaluation section을 latency-first 목표에 맞게 업데이트
+
+#### egglog 전환 상태 (2026-05-06)
+
+결정:
+- 자체 구현한 `EGraph.add/merge/rebuild`를 main pipeline에서 계속 신뢰하지 않는다.
+- e-graph 엔진은 egglog로 전환한다.
+- ONNX/IR materialization, ORT correctness, ORT latency validation은 우리 코드에 남긴다.
+
+현재 반영:
+- `pipeline.py`는 `EgglogBackend`를 통해 saturation/extraction을 수행한다.
+- egglog backend 위치는 `src/superopt/backends/egglog.py`.
+- `requirements.txt`에 `egglog>=13.1` 추가.
+- outdated smoke runner였던 `src/superopt/check.py`, `src/superopt/check.sh`는 삭제했다.
+  - 이유: 이 runner는 `ir_to_egraph -> explore -> extract_greedy` checkpoint를
+    직접 호출해서 현재 egglog main path를 검증하지 않는다.
+- 기존 자체 e-graph 구현 파일은 아직 삭제하지 않았다.
+  - 이유: `RewriteRule`, `PatternNode`, 일부 analysis/check/apply_fn 코드가 아직
+    이 타입들에 의존한다.
+  - 다음 단계에서 rule 표현과 legalization 포팅이 끝나면 삭제/격리한다.
+- legacy 표시를 추가했다.
+  - `src/superopt/egraph/egraph.py`
+  - `src/superopt/explore/explorer.py`
+  - `src/superopt/extract/greedy.py`
+  - `src/superopt/extract/ilp.py`
+  - `pipeline.py`의 `ir_to_egraph()`
+- `src/superopt/extract/__init__.py`에서는 더 이상 legacy `extract_greedy`를
+  public export하지 않는다.
+
+현재 gap:
+- egglog로 바로 등록되는 rule은 pure pattern rewrite뿐이다.
+  - 예: `Add(x,y)->Add(y,x)`, `Reshape(Reshape(x,y),z)->Reshape(x,z)`
+- 기존 `check`/`apply_fn` 기반 rule은 아직 egglog backend에서 skip된다.
+  - 예: `Pow` exponent 값 확인, `Squeeze/Unsqueeze -> Reshape` shape 생성,
+    `LayerNorm` decomposition, `Gemm` decomposition, `MatMul -> Conv`.
+- 즉 현재 egglog 경로는 "엔진 교체 + round-trip + pure rewrite smoke" 단계다.
+  latency에 중요한 synthetic constant/weight 변환 rule은 아직 포팅 전이다.
+
+다음 할 일:
+[ ] `RewriteRule`을 egglog-native rule 표현으로 재정리
+[ ] `check` 기반 rule을 egglog analysis/facts 또는 Python pre-filter 방식으로 포팅
+[ ] `apply_fn` 기반 rule을 "candidate graph synthesis" 단계로 분리할지,
+    egglog function/action으로 표현할지 결정
+[ ] 우선순위 1: `MatMul -> Conv` 포팅 후 top-k validation으로 correctness gate
+[ ] 우선순위 2: `Gemm -> MatMul/Add`, ORT fusion을 깨지 않는 방향으로 재검토
+[ ] 우선순위 3: `LayerNorm` decomposition은 latency-first 목표에서는 기본 off 또는
+    validation 후보로만 취급
+[ ] egglog `extract_multiple` 후보에 대해 materialized ONNX graph hash dedup 추가
+[ ] egglog extraction cost를 `greedy_dag_cost_model(ORT cost)`로 통일하고,
+    top-k 후보의 estimated cost도 기록
 
 ---
 
@@ -741,7 +810,14 @@ e-class 트리로 복제되어 e-graph가 O(layer 수)로 커지는 문제.
 
 ### 4.3 Python 성능
 
-- 현재 tinyllama_15m(761 e-class)는 수 초 내 완료.
-- mobilevit_xxs(417 노드)에서 e-graph 폭발 발생 — 규칙 수/조합 문제이지
-  Python 자체의 한계는 아직 아님.
-- 대형 모델에서 bottleneck이 되면 egglog Python binding 검토.
+- 자체 e-graph 구현 성능/정합성 리스크를 줄이기 위해 egglog backend로 전환했다.
+- `mobilenetv2` 100-node 모델은 egglog round-trip과 pure rewrite 1 iteration이
+  수 초 내 완료된다.
+- `mobilevit_xxs` 417-node 모델은 현재 generic egglog encoding에서 round-trip
+  extraction도 느리다. 원인은 아직 미확정:
+  - generic `opN(op_string, attrs_string, ...)` encoding 비용
+  - 모든 노드를 `let`으로 등록하는 방식의 overhead
+  - `extract_multiple` 비용
+  - 큰 graph의 attr/name 보존 방식
+- 따라서 다음 성능 작업은 large model 전에 egglog encoding을 더 직접적으로
+  줄이는 것이다.
