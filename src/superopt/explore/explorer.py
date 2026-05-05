@@ -1,7 +1,8 @@
 """Legacy exploration phase for the hand-rolled e-graph.
 
-The main superopt pipeline no longer calls this module.  New optimization
-runs use ``superopt.backends.egglog.EgglogBackend``.
+New optimization runs use ``superopt.backends.egglog.EgglogBackend`` as the
+primary backend. This module is still called only by the temporary bridge for
+legacy ``check``/``apply_fn`` rules.
 
 This is the main loop of equality saturation.
 Each iteration:
@@ -62,9 +63,7 @@ def explore(
         stats.iterations = iteration + 1
 
         if egraph.num_enodes >= max_nodes:
-            logger.info(
-                "exploration stopped: node limit %d reached", max_nodes
-            )
+            logger.info("exploration stopped: node limit %d reached", max_nodes)
             break
 
         # 1. find all matches
@@ -84,9 +83,7 @@ def explore(
                 egraph, match.rule, match.eclass_id, match.subst, desc_map
             ):
                 continue
-            result = apply_rule(
-                egraph, match.rule, match.eclass_id, match.subst
-            )
+            result = apply_rule(egraph, match.rule, match.eclass_id, match.subst)
             if result is not None:
                 applied += 1
 

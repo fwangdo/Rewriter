@@ -1,7 +1,9 @@
 """Legacy hand-rolled e-graph data structure.
 
-The main superopt pipeline no longer uses this implementation.  It now uses
-``superopt.backends.egglog`` for equality saturation and extraction.
+The main superopt pipeline uses ``superopt.backends.egglog`` as the primary
+equality saturation and extraction backend. This implementation is still used
+as a temporary bridge for legacy ``check``/``apply_fn`` rules that synthesize
+constants or inspect Python-side tensor values.
 
 This module is intentionally kept for reference and for code that still uses
 the old Pattern/RewriteRule representation during the egglog migration.
@@ -50,9 +52,7 @@ class EGraph:
         If an identical e-node already exists, return its e-class.
         Otherwise create a new e-class containing this e-node.
         """
-        canon = enode.canonicalize(
-            {cid: self.find(cid) for cid in enode.children}
-        )
+        canon = enode.canonicalize({cid: self.find(cid) for cid in enode.children})
         if canon in self._memo:
             return self.find(self._memo[canon])
 
@@ -161,9 +161,7 @@ class EGraph:
         try:
             for nid in ec.nodes:
                 enode = self._nodes[nid]
-                new_data = AnalysisData.join(
-                    new_data, compute_analysis(self, enode)
-                )
+                new_data = AnalysisData.join(new_data, compute_analysis(self, enode))
         except ValueError:
             return
         if new_data != ec.data:

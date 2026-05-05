@@ -1,7 +1,8 @@
 """Legacy greedy extraction for the hand-rolled e-graph.
 
-The main superopt pipeline no longer uses this extractor.  Egglog extraction
-lives in ``superopt.backends.egglog``.
+Egglog extraction lives in ``superopt.backends.egglog``. This extractor is
+still used only by the temporary bridge that materializes legacy
+``check``/``apply_fn`` rules before handing the graph back to egglog.
 
 Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 """

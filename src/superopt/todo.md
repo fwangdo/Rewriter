@@ -751,15 +751,29 @@ Correctness 기준: Gawee 동일 — `np.allclose(orig, opt, atol, rtol=1e-4)`
   - `pipeline.py`의 `ir_to_egraph()`
 - `src/superopt/extract/__init__.py`에서는 더 이상 legacy `extract_greedy`를
   public export하지 않는다.
+- 현재는 거친 bridge를 둔다.
+  - `check`/`apply_fn` 기반 legalization rule은 legacy e-graph에서 먼저
+    materialize한다.
+  - 그 결과 IR을 다시 egglog backend에 넣어 pure rewrite/extraction을 수행한다.
+  - 최종 설계는 아니지만 기존 Python-side shape/value/synthetic constant logic을
+    egglog main path에서 다시 사용할 수 있게 한다.
 
 현재 gap:
 - egglog로 바로 등록되는 rule은 pure pattern rewrite뿐이다.
   - 예: `Add(x,y)->Add(y,x)`, `Reshape(Reshape(x,y),z)->Reshape(x,z)`
-- 기존 `check`/`apply_fn` 기반 rule은 아직 egglog backend에서 skip된다.
+- 기존 `check`/`apply_fn` 기반 rule은 egglog-native rule은 아니며 bridge에서 처리된다.
   - 예: `Pow` exponent 값 확인, `Squeeze/Unsqueeze -> Reshape` shape 생성,
     `LayerNorm` decomposition, `Gemm` decomposition, `MatMul -> Conv`.
-- 즉 현재 egglog 경로는 "엔진 교체 + round-trip + pure rewrite smoke" 단계다.
-  latency에 중요한 synthetic constant/weight 변환 rule은 아직 포팅 전이다.
+- 즉 현재 경로는 "legacy callback materialization -> egglog pure rewrite/extraction"이다.
+  latency에 중요한 synthetic constant/weight 변환 rule은 동작하지만 egglog-native
+  포팅은 아직 전이다.
+
+Bridge smoke:
+- model: `mobilenetv2`
+- command: `superoptimize_topk(..., max_iter=1, max_nodes=5000, k=1)`
+- result: original nodes 100, extracted nodes 100, iterations 3, applied 13
+- ORT correctness: PASS, max_abs_diff=0.0
+- latency: 약 11.41ms
 
 다음 할 일:
 [ ] `RewriteRule`을 egglog-native rule 표현으로 재정리
