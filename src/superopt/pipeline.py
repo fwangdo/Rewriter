@@ -167,8 +167,6 @@ def superoptimize(
 
     # ONNX → IR.,
     ir = onnx_to_ir(model)
-    # print(ir)
-    # sys.exit(1)
 
     original_nodes = sum(
         1 for n in ir.nodes.values()
@@ -177,7 +175,7 @@ def superoptimize(
     )
 
     # IR → e-graph.
-    # TODO: checkpoint 2. 
+    # TODO: checkpoint 2. -> change to egraph.  
     egraph, root_cid = ir_to_egraph(ir)
 
     # Phase 1: Legalization (decompose complex ops into simpler ones).

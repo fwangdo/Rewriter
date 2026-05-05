@@ -32,7 +32,7 @@ def get_arithmetic_rules() -> list[RewriteRule]:
         target=PatternNode("Mul", (y, x)),
     ))
 
-    # Low-risk skeleton rules that do not require constant synthesis.
+    # --- associativity ---
     rules.append(RewriteRule(
         name="add_assoc_right",
         source=PatternNode("Add", (PatternNode("Add", (x, y)), PatternVar("?z"))),

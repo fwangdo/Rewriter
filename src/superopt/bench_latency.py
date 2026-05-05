@@ -14,13 +14,14 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 
+# (domain, name, max_iter, max_nodes)
 MODELS = [
-    ("nlp", "tinyllama_15m"),
-    ("nlp", "smollm_135m"),
-    ("nlp", "pythia_70m"),
-    ("vision", "mobilenetv2"),
-    ("vision", "mobilevit_xxs"),
-    ("vision", "yolo26_nano"),
+    ("nlp", "tinyllama_15m", 10, 20_000),
+    ("nlp", "smollm_135m", 5, 10_000),
+    ("nlp", "pythia_70m", 10, 20_000),
+    ("vision", "mobilenetv2", 15, 50_000),
+    ("vision", "mobilevit_xxs", 15, 50_000),
+    ("vision", "yolo26_nano", 10, 20_000),
 ]
 
 # Tolerances per domain (from Gawee).
@@ -150,11 +151,13 @@ def run_onnx_optimizer(input_path: str, output_path: str) -> bool:
         return False
 
 
-def run_superopt_topk(input_path: str, output_dir: str, k: int = 5) -> list[str] | None:
+def run_superopt_topk(input_path: str, output_dir: str, k: int = 5,
+                      max_iter: int = 15, max_nodes: int = 50_000) -> list[str] | None:
     """Run superopt top-k pipeline. Returns list of candidate paths, or None."""
     try:
         from src.superopt.pipeline import superoptimize_topk
-        results = superoptimize_topk(input_path, output_dir, k=k)
+        results = superoptimize_topk(input_path, output_dir, k=k,
+                                     max_iter=max_iter, max_nodes=max_nodes)
         return [r.output_path for r in results]
     except Exception as e:
         print(f"    superopt FAIL: {e}")
@@ -195,7 +198,7 @@ def main():
 
     results = []
 
-    for domain, name in MODELS:
+    for domain, name, max_iter, max_nodes in MODELS:
         model_path = ROOT / f"benchmarks/onnx/{domain}/{name}/onnx/model.onnx"
         if not model_path.exists():
             print(f"SKIP {name}: not found")
@@ -228,8 +231,9 @@ def main():
 
         # 3. Superopt top-k
         so_dir = str(artifacts / f"{name}_candidates")
-        print("  [superopt] optimizing (top-5)...")
-        candidates = run_superopt_topk(str(model_path), so_dir, k=5)
+        print(f"  [superopt] optimizing (top-5, iter={max_iter}, nodes={max_nodes})...")
+        candidates = run_superopt_topk(str(model_path), so_dir, k=5,
+                                       max_iter=max_iter, max_nodes=max_nodes)
         r_so = {"status": "FAIL_OPT"}
         if candidates:
             best_lat = float("inf")

@@ -104,8 +104,23 @@ def extract_topk(
             if not extractable:
                 continue
 
-            combinations = product(*child_lists) if child_lists else [()]
-            for combo in combinations:
+            # Limit combinations to avoid exponential blowup.
+            # Only combine the single best from each child (greedy),
+            # then add alternatives by varying one child at a time.
+            if not child_lists:
+                all_combos: list[tuple] = [()]
+            else:
+                all_combos = []
+                # Base: best from each child
+                base = tuple(cl[0] for cl in child_lists)
+                all_combos.append(base)
+                # Variations: swap one child at a time
+                for ci, cl in enumerate(child_lists):
+                    for alt in cl[1:k]:
+                        variant = list(base)
+                        variant[ci] = alt
+                        all_combos.append(tuple(variant))
+            for combo in all_combos:
                 total = cost_model.node_cost(enode)
                 choices: dict[EClassId, ENode] = {}
                 conflict = False
