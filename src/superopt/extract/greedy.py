@@ -5,6 +5,8 @@ Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from itertools import product
 import logging
 
 from ..egraph.egraph import EGraph
@@ -14,6 +16,14 @@ from ..ir.node import IRNode
 from .cost import CostModel
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ExtractedProgram:
+    """One extracted candidate program."""
+
+    cost: float
+    ir: IRGraph
 
 
 def extract_greedy(
@@ -35,11 +45,102 @@ def extract_greedy(
     if blacklist is None:
         blacklist = set()
 
-    # Map each canonical e-class id → chosen e-node.
-    best: dict[EClassId, tuple[float, ENode]] = {}
+    programs = extract_topk(egraph, root_cid, cost_model, k=1, blacklist=blacklist)
+    if not programs:
+        raise ValueError("cannot extract: no candidate programs")
+    return programs[0].ir
+
+
+def extract_topk(
+    egraph: EGraph,
+    root_cid: EClassId,
+    cost_model: CostModel,
+    k: int = 5,
+    blacklist: set[int] | None = None,
+) -> list[ExtractedProgram]:
+    """Extract the k lowest estimated-cost programs.
+
+    This is a bounded bottom-up k-best extractor. It is still greedy at each
+    e-class boundary, but it keeps multiple alternatives so later validation
+    can choose the fastest candidate that passes correctness.
+    """
+    if blacklist is None:
+        blacklist = set()
+    if k <= 0:
+        return []
 
     # Collect all reachable e-class ids from root in topological order
     # (leaves first) via DFS post-order.
+    reachable = _reachable_eclasses(egraph, root_cid)
+
+    # Map canonical e-class id -> top candidates for that e-class.
+    # Each candidate is (cost, choices), where choices maps every reachable
+    # e-class in the subtree to the selected e-node for that e-class.
+    best: dict[EClassId, list[tuple[float, dict[EClassId, ENode]]]] = {}
+
+    def _signature(choices: dict[EClassId, ENode]) -> tuple[tuple[EClassId, ENode], ...]:
+        return tuple(sorted(choices.items(), key=lambda item: item[0]))
+
+    for cid in reachable:
+        ec = egraph.eclass(cid)
+        candidates: list[tuple[float, dict[EClassId, ENode]]] = []
+        seen: set[tuple[tuple[EClassId, ENode], ...]] = set()
+
+        for nid in ec.nodes:
+            if nid in blacklist:
+                continue
+            enode = egraph.enode(nid)
+            if not cost_model.is_legal(enode):
+                continue
+            child_lists = []
+            extractable = True
+            for child in enode.children:
+                child_cid = egraph.find(child)
+                child_candidates = best.get(child_cid)
+                if not child_candidates:
+                    extractable = False
+                    break
+                child_lists.append(child_candidates)
+            if not extractable:
+                continue
+
+            combinations = product(*child_lists) if child_lists else [()]
+            for combo in combinations:
+                total = cost_model.node_cost(enode)
+                choices: dict[EClassId, ENode] = {}
+                conflict = False
+                for child_cost, child_choices in combo:
+                    total += child_cost
+                    for child_choice_cid, child_choice_enode in child_choices.items():
+                        existing = choices.get(child_choice_cid)
+                        if existing is not None and existing != child_choice_enode:
+                            conflict = True
+                            break
+                        choices[child_choice_cid] = child_choice_enode
+                    if conflict:
+                        break
+                if conflict:
+                    continue
+                choices[cid] = enode
+                sig = _signature(choices)
+                if sig in seen:
+                    continue
+                seen.add(sig)
+                candidates.append((total, choices))
+
+        candidates.sort(key=lambda item: item[0])
+        best[cid] = candidates[:k]
+        if not best[cid]:
+            raise ValueError(f"cannot extract e-class {cid}: no e-nodes available")
+
+    root = egraph.find(root_cid)
+    return [
+        ExtractedProgram(cost=cost, ir=_build_ir_from_choices(egraph, reachable, choices, root))
+        for cost, choices in best[root][:k]
+    ]
+
+
+def _reachable_eclasses(egraph: EGraph, root_cid: EClassId) -> list[EClassId]:
     reachable: list[EClassId] = []
     visited: set[EClassId] = set()
 
@@ -54,48 +155,17 @@ def extract_greedy(
         reachable.append(cid)
 
     _dfs_postorder(egraph.find(root_cid))
+    return reachable
 
-    for cid in reachable:
-        ec = egraph.eclass(cid)
-        best_legal: tuple[float, ENode] | None = None
-        best_any: tuple[float, ENode] | None = None
 
-        for nid in ec.nodes:
-            if nid in blacklist:
-                continue
-            enode = egraph.enode(nid)
-            # Total cost = node cost + sum of children costs.
-            child_cost = 0.0
-            extractable = True
-            for child in enode.children:
-                child_cid = egraph.find(child)
-                if child_cid not in best:
-                    extractable = False
-                    break
-                child_cost += best[child_cid][0]
-            if not extractable:
-                continue
-            total = cost_model.node_cost(enode) + child_cost
+def _build_ir_from_choices(
+    egraph: EGraph,
+    reachable: list[EClassId],
+    choices: dict[EClassId, ENode],
+    root_cid: EClassId,
+) -> IRGraph:
+    """Reconstruct an IRGraph from selected e-nodes."""
 
-            if best_any is None or total < best_any[0]:
-                best_any = (total, enode)
-            if cost_model.is_legal(enode):
-                if best_legal is None or total < best_legal[0]:
-                    best_legal = (total, enode)
-
-        if best_legal is not None:
-            chosen = best_legal
-        elif best_any is not None:
-            logger.warning(
-                "e-class %d: no legal e-node, falling back to op=%r",
-                cid, best_any[1].op,
-            )
-            chosen = best_any
-        else:
-            raise ValueError(f"cannot extract e-class {cid}: no e-nodes available")
-        best[cid] = chosen
-
-    # Reconstruct IRGraph from chosen e-nodes.
     ir = IRGraph()
 
     def _node_id(cid: EClassId) -> str:
@@ -106,7 +176,9 @@ def extract_greedy(
 
     cid_to_node_id: dict[EClassId, str] = {}
     for cid in reachable:
-        _, enode = best[cid]
+        if cid not in choices:
+            continue
+        enode = choices[cid]
         child_ids: list[str] = []
         for child in enode.children:
             child_cid = egraph.find(child)

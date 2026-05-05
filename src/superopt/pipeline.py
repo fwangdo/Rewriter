@@ -17,10 +17,12 @@ from .egraph.egraph import EGraph
 from .egraph.enode import EClassId, ENode
 from .explore.explorer import ExploreStats, explore
 from .extract.cost import CostModel
-from .extract.greedy import extract_greedy
+from .extract.greedy import extract_greedy, extract_topk
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+from .rules.arithmetic import get_arithmetic_rules
+from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
 from .rules.legalization import get_legalization_rules
 
@@ -57,6 +59,7 @@ class SuperoptResult:
     original_nodes: int = 0
     optimized_nodes: int = 0
     explore_stats: ExploreStats = field(default_factory=ExploreStats)
+    estimated_cost: float | None = None
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
@@ -111,6 +114,34 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     return egraph, root_cid
 
 
+def _attach_initializers(opt_ir: IRGraph, source_ir: IRGraph) -> None:
+    """Carry over initializer leaves that survived extraction."""
+    for name, node in opt_ir.nodes.items():
+        if node.op != OP_WEIGHT:
+            continue
+        if name in source_ir.initializers:
+            opt_ir.add_initializer(name, source_ir.initializers[name])
+            continue
+
+        # Synthetic weights created by legalization apply_fn carry a
+        # __synth__ attr with (dtype_str, shape, bytes).
+        synth = node.attrs_dict.get("__synth__")
+        if synth is not None:
+            dtype_str, shape, data = synth
+            arr = np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape)
+            opt_ir.add_initializer(name, arr.copy())
+            continue
+
+        raise KeyError(f"missing initializer payload for extracted weight: {name}")
+
+
+def _make_output_model(opt_ir: IRGraph, source_ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
+    _attach_initializers(opt_ir, source_ir)
+    opt_model = ir_to_onnx(opt_ir, ref_model)
+    from .compat import run_post_passes
+    return run_post_passes(opt_model)
+
+
 def superoptimize(
     input_path: str | Path,
     output_path: str | Path,
@@ -157,10 +188,8 @@ def superoptimize(
         max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
     )
 
-    # Phase 2: layout-only cleanup (bounded).
-    # Arithmetic associativity/commutativity is not bit-exact for floating
-    # point tensors and can violate the correctness gate.
-    opt_rules = get_layout_rules()
+    # Phase 2: arithmetic/layout/fusion optimization (bounded).
+    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
     opt_iter = min(3, max_iter)
     opt_stats, opt_blacklist = explore(
         egraph, opt_rules,
@@ -177,32 +206,7 @@ def superoptimize(
     cost_model = CostModel()
     opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
 
-    # Carry over only initializer leaves that survived extraction.
-    # Synthetic weights (created by legalization apply_fn) carry a
-    # __synth__ attr with (dtype_str, shape, bytes) for reconstruction.
-    for name, node in opt_ir.nodes.items():
-        if node.op == OP_WEIGHT:
-            if name in ir.initializers:
-                opt_ir.add_initializer(name, ir.initializers[name])
-            else:
-                # Try to reconstruct from __synth__ attr.
-                synth = node.attrs_dict.get("__synth__")
-                if synth is not None:
-                    dtype_str, shape, data = synth
-                    arr = np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape)
-                    opt_ir.add_initializer(name, arr.copy())
-                else:
-                    raise KeyError(
-                        f"missing initializer payload for extracted weight: {name}"
-                    )
-
-    # IR → ONNX.
-    opt_model = ir_to_onnx(opt_ir, model)
-
-    # Post-pass: constant folding + cleanup to remove Constant/ConstantOfShape/Shape nodes.
-    from .compat import run_post_passes
-    opt_model = run_post_passes(opt_model)
-
+    opt_model = _make_output_model(opt_ir, ir, model)
     onnx.save(opt_model, output_path)
 
     optimized_nodes = sum(
@@ -217,3 +221,70 @@ def superoptimize(
         optimized_nodes=optimized_nodes,
         explore_stats=explore_stats,
     )
+
+
+def superoptimize_topk(
+    input_path: str | Path,
+    output_dir: str | Path,
+    supported_ops: frozenset[str] | None = None,
+    max_iter: int = 15,
+    max_nodes: int = 50_000,
+    k: int = 5,
+) -> list[SuperoptResult]:
+    """Materialize the top-k estimated-cost extraction candidates."""
+    del supported_ops
+    input_path = str(input_path)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    model = onnx.load(input_path)
+    from .compat import run_pre_passes
+    model = run_pre_passes(model)
+
+    ir = onnx_to_ir(model)
+    original_nodes = sum(
+        1 for n in ir.nodes.values()
+        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
+    )
+
+    egraph, root_cid = ir_to_egraph(ir)
+    legalization_rules = get_legalization_rules()
+    explore_stats, blacklist = explore(
+        egraph, legalization_rules,
+        max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
+    )
+
+    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
+    opt_stats, opt_blacklist = explore(
+        egraph, opt_rules,
+        max_iter=min(3, max_iter), max_nodes=max_nodes, root_cid=root_cid,
+    )
+    blacklist |= opt_blacklist
+    explore_stats.iterations += opt_stats.iterations
+    explore_stats.total_matches += opt_stats.total_matches
+    explore_stats.total_applied += opt_stats.total_applied
+    explore_stats.final_eclasses = opt_stats.final_eclasses
+    explore_stats.final_enodes = opt_stats.final_enodes
+
+    cost_model = CostModel()
+    programs = extract_topk(egraph, root_cid, cost_model, k=k, blacklist=blacklist)
+
+    results: list[SuperoptResult] = []
+    for index, program in enumerate(programs):
+        opt_ir = program.ir
+        opt_model = _make_output_model(opt_ir, ir, model)
+        output_path = output_dir / f"candidate_{index}.onnx"
+        onnx.save(opt_model, output_path)
+        optimized_nodes = sum(
+            1 for n in opt_ir.nodes.values()
+            if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
+        )
+        results.append(SuperoptResult(
+            input_path=input_path,
+            output_path=str(output_path),
+            original_nodes=original_nodes,
+            optimized_nodes=optimized_nodes,
+            explore_stats=explore_stats,
+            estimated_cost=program.cost,
+        ))
+    return results

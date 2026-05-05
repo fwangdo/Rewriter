@@ -194,8 +194,13 @@ def get_legalization_rules() -> list[RewriteRule]:
     ))
 
     # --- F10: MatMul→Conv (static weight) ---
-    # Disabled for now: ONNX Runtime Conv and MatMul can differ enough in
-    # accumulation order to break LLM correctness tolerances.
+    rules.append(RewriteRule(
+        name="matmul_to_conv",
+        source=PatternNode("MatMul", (a, w)),
+        target=PatternNode("MatMul", (a, w)),  # placeholder
+        check=_check_matmul_static_weight,
+        apply_fn=_apply_matmul_to_conv,
+    ))
 
     # --- F11: Erf → Tanh approximation ---
     # Erf(x) ≈ Tanh(x * 0.7978845608 * (1 + 0.044715 * x²))

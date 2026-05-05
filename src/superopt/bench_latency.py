@@ -77,7 +77,15 @@ def make_inputs(sess: ort.InferenceSession, seed: int = 42) -> dict[str, np.ndar
         is_bool = "bool" in inp.type.lower()
 
         if is_int:
-            inputs[inp.name] = rng.integers(0, 1000, size=shape, dtype=np.int64)
+            if "position_ids" in inp.name:
+                # Position IDs must be sequential (for RoPE)
+                inputs[inp.name] = np.arange(shape[-1], dtype=np.int64).reshape(shape)
+            elif "attention_mask" in inp.name:
+                inputs[inp.name] = np.ones(shape, dtype=np.int64)
+            elif "input_ids" in inp.name:
+                inputs[inp.name] = rng.integers(0, 100, size=shape, dtype=np.int64)
+            else:
+                inputs[inp.name] = rng.integers(0, 100, size=shape, dtype=np.int64)
         elif is_bool:
             inputs[inp.name] = rng.integers(0, 2, size=shape).astype(np.bool_)
         else:
@@ -142,15 +150,15 @@ def run_onnx_optimizer(input_path: str, output_path: str) -> bool:
         return False
 
 
-def run_superopt(input_path: str, output_path: str) -> bool:
-    """Run our superopt pipeline."""
+def run_superopt_topk(input_path: str, output_dir: str, k: int = 5) -> list[str] | None:
+    """Run superopt top-k pipeline. Returns list of candidate paths, or None."""
     try:
-        from src.superopt.pipeline import superoptimize
-        superoptimize(input_path, output_path)
-        return True
+        from src.superopt.pipeline import superoptimize_topk
+        results = superoptimize_topk(input_path, output_dir, k=k)
+        return [r.output_path for r in results]
     except Exception as e:
         print(f"    superopt FAIL: {e}")
-        return False
+        return None
 
 
 def evaluate_model(tag: str, model_path: str, orig_sess: ort.InferenceSession,
@@ -218,13 +226,22 @@ def main():
         else:
             r_opt = {"status": "FAIL_OPT"}
 
-        # 3. Superopt
-        so_path = str(artifacts / f"{name}_superopt.onnx")
-        print("  [superopt] optimizing...")
-        if run_superopt(str(model_path), so_path):
-            r_so = evaluate_model("superopt", so_path, orig_sess, orig_outputs, inputs, domain)
-        else:
-            r_so = {"status": "FAIL_OPT"}
+        # 3. Superopt top-k
+        so_dir = str(artifacts / f"{name}_candidates")
+        print("  [superopt] optimizing (top-5)...")
+        candidates = run_superopt_topk(str(model_path), so_dir, k=5)
+        r_so = {"status": "FAIL_OPT"}
+        if candidates:
+            best_lat = float("inf")
+            for ci, cpath in enumerate(candidates):
+                r_c = evaluate_model(f"candidate_{ci}", cpath, orig_sess, orig_outputs, inputs, domain)
+                if r_c and r_c.get("status") == "OK" and r_c["latency_ms"] < best_lat:
+                    best_lat = r_c["latency_ms"]
+                    r_so = r_c
+            if r_so.get("status") == "OK":
+                print(f"  [superopt] BEST: {r_so['latency_ms']:.2f} ms")
+            else:
+                print(f"  [superopt] no valid candidate found")
 
         results.append({
             "name": name,

@@ -580,8 +580,21 @@ def superoptimize(
 ### Phase 9: ORT latency-first extraction ← **현재 단계**
 
 **변경된 목표**: supported/unsupported op 구분은 extraction constraint로 쓰지 않는다.
-모든 ONNX op를 허용하고, ONNX Runtime profiling에서 측정한 op별 평균 latency
-cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한다.
+모든 ONNX op를 허용하고, ONNX Runtime latency를 기준으로 가장 빠른 graph를 찾는다.
+
+중요한 방향 전환:
+
+- rewrite rule은 가능한 한 모두 켠다. graph space를 줄여서 correctness를 맞추는 것은
+  superoptimization 목표와 맞지 않는다.
+- 단일 greedy extraction 결과만 믿지 않는다. cost가 낮은 후보를 여러 개 뽑고,
+  correctness gate를 통과한 후보 중 실제 ORT latency가 가장 낮은 graph를 선택한다.
+- 즉 목표는 `min estimated_cost(graph)`가 아니라 아래에 가깝다.
+
+```
+min measured_latency(graph)
+subject to ORT load succeeds
+       and correctness(graph, original) <= tolerance
+```
 
 최종 성공 기준은 아래 순서다.
 
@@ -589,16 +602,55 @@ cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한
 2. 원본 모델과 superopt output이 correctness tolerance 안에 든다.
 3. end-to-end ORT CPU latency가 원본 또는 ORT optimizer 결과보다 개선된다.
 
-#### 현재 확인 결과
+#### Cost model 방향
 
-| Model | 상태 | 확인 내용 |
-|-------|------|-----------|
-| mobilenetv2 | correctness PASS | current pipeline: `max_abs_diff=0.0`, 9 cases |
-| mobilevit_xxs | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
-| yolo26_nano | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
-| tinyllama_15m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
-| pythia_70m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
-| smollm_135m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
+현재 `CostModel`은 `artifacts/superopt/op_cost_table.json`의 op type별 평균
+latency를 사용한다. 이 방식은 scaffold로는 유용하지만 최종 cost model로는
+부족하다.
+
+문제점:
+
+- 같은 `MatMul`이라도 `(M, K, N)`, batch, dtype, broadcasting 여부에 따라
+  latency가 크게 달라진다.
+- 같은 `Conv`라도 input layout, channel 수, kernel size, stride, group,
+  spatial size에 따라 latency가 크게 달라진다.
+- op type 평균 cost는 memory traffic, fusion 가능성, ORT graph optimizer가
+  만드는 fused kernel을 반영하지 못한다.
+- `MatMul -> Conv`처럼 op type 평균으로는 좋아 보이는 rewrite도 shape와 커널
+  구현에 따라 실제 latency/correctness trade-off가 다를 수 있다.
+
+정교화 방향:
+
+[ ] op type 평균 cost를 shape/context-aware cost로 확장
+[ ] `MatMul(M,K,N,batch,dtype)` feature 기반 cost table 구축
+[ ] `Conv(N,C,H,W,K,stride,group,dtype)` feature 기반 cost table 구축
+[ ] ORT profiling의 fused op (`FusedMatMul`, `FusedConv`, `QuickGelu`,
+    `SimplifiedLayerNormalization`)를 cost model에 반영
+[ ] static cost estimate와 실제 candidate ORT latency 측정을 함께 사용
+[ ] cost model이 고른 후보와 실제 latency 순위의 correlation 측정
+
+#### 현재 확인 결과 (2026-05-05, bench_latency.py correctness gate)
+
+Correctness 기준: Gawee 동일 — `np.allclose(orig, opt, atol, rtol=1e-4)`
+- Vision: atol=1e-4 / NLP: atol=5e-4
+
+| Model | Correctness | max_abs_diff | Original (ms) | Superopt (ms) | SO/Orig |
+|-------|-------------|-------------|---------------|---------------|---------|
+| tinyllama_15m | **PASS** | 2.53e-05 | 48.6 | 49.8 | 1.02x |
+| smollm_135m | **PASS** | 1.60e-04 | 394 | 440 | 1.12x |
+| mobilenetv2 | **PASS** | 3.33e-16 | 11.9 | 12.0 | 1.01x |
+| mobilevit_xxs | **PASS** | 5.22e-08 | 12.8 | 13.4 | 1.04x |
+| pythia_70m | **FAIL** | 1.23e-02 | 129.6 | - | - |
+| yolo26_nano | **FAIL** | 8.63 | 98.3 | - | - |
+
+핵심 관찰:
+- **4/6 correctness PASS** (입력 생성 문제 해결 후)
+- correctness PASS 모델은 전부 **원본보다 느림** (1~12%)
+- 원인: decomposition이 ORT fusion을 방해 (LayerNorm→5ops, Pow→Mul 등)
+- ORT는 자체적으로 `FusedMatMul`, `SimplifiedLayerNormalization` 등을 만듦
+- 우리가 decompose한 결과가 ORT가 이미 더 잘 하는 것을 방해하는 상황
+- pythia_70m: arithmetic rewrite (add/mul assoc)로 인한 numerical drift 추정
+- yolo26_nano: Resize op 인자 처리 오류 (sizes/scales 혼동)
 
 #### 이번에 확인한 correctness blocker
 
@@ -615,10 +667,11 @@ cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한
   경로가 달라져 작은 numerical drift가 생겼다. 살아 있는 tensor의 원본
   `value_info`를 보존해 bit-exact correctness를 회복했다.
 - floating-point `Add/Mul` associativity rewrite는 수학적 equality처럼 보여도
-  bit-exact equality가 아니다. correctness gate를 위해 기본 pipeline은
-  arithmetic/fusion phase를 끄고 layout-only cleanup만 수행한다.
+  bit-exact equality가 아니다. 현업에서는 이런 rewrite를 금지하기보다,
+  tolerance / task metric / fallback 기준을 둔다.
 - static `MatMul -> Conv`도 ORT CPU 커널의 누산 순서 차이로 LLM tolerance를
-  넘을 수 있어 현재 rule set에서는 비활성화했다.
+  넘을 수 있다. 이 역시 rule을 끄는 대신 candidate validation으로 걸러내는
+  방향이 맞다.
 
 #### 다음 할 일
 
@@ -626,7 +679,30 @@ cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한
 [x] yolo26_nano `Resize` optional input round-trip 복원 수정
 [x] mobilevit_xxs current pipeline ORT correctness 확인
 [x] smollm_135m current pipeline ORT correctness 확인
-[ ] latency benchmark를 correctness gate 이후에만 집계하도록 정리
+[x] rule set 전체를 켠 상태에서 top-k candidate extraction 구현
+[x] candidate별 ORT load / correctness / latency validation loop 구��
+[x] latency benchmark를 correctness gate 이후에만 집계하도록 정리 (bench_latency.py)
+[x] ORT profiling 기반 op type 평균 cost table 구축 (profile_ops.py → op_cost_table.json)
+
+**블로커: superopt가 원본보다 느린 근본 원인**
+
+현재 rewrite rule은 "complex op → simpler ops" decomposition 위주다.
+하지만 ORT가 이미 runtime에 fusion하는 패턴을 decompose하면 역효과:
+- LayerNorm → ReduceMean+Sub+Mul+Sqrt+Div (ORT는 SimplifiedLayerNormalization 커널 보유)
+- Pow(x,2) → Mul(x,x) (ORT는 Pow를 직접 실행, 오히려 더 빠를 수 있음)
+- MatMul → Conv (context에 따라 Conv가 더 느림)
+
+**latency 개선을 위한 방향:**
+
+[ ] "ORT가 fusion하는 패턴"을 분석하여, 그 패턴을 깨지 않는 rule만 적용
+    → ORT의 graph optimizer pass list를 참조하여 "보호 패턴" 정의
+[ ] 또는 반대로: ORT가 못 하는 fusion을 우리가 해주는 rule 추가
+    → 예: MatMul+Add+Gelu → BiasGelu 패턴으로 합치기 (ORT fusion 유도)
+[ ] shape-aware cost model: 같은 op type이라도 shape에 따라 cost 다르게
+[ ] DAG sharing-aware extraction: subtree cost 중복 합산 방지
+[ ] top-k에서 실제 ORT latency로 최종 선택 (estimate는 필터링용)
+[ ] tinyllama/pythia 입력 범위 수정 (input_ids를 vocab 범위 내로)
+[ ] yolo26_nano correctness 실패 원인 조사 (Resize op 관련)
 [ ] paper evaluation section을 latency-first 목표에 맞게 업데이트
 
 ---
