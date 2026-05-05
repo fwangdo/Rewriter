@@ -21,8 +21,6 @@ from .extract.greedy import extract_greedy
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
-from .rules.arithmetic import get_arithmetic_rules
-from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
 from .rules.legalization import get_legalization_rules
 
@@ -159,10 +157,10 @@ def superoptimize(
         max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
     )
 
-    # Phase 2: Arithmetic/layout/fusion optimization (bounded).
-    # These rules (commute, assoc, etc.) can explode on large models,
-    # so we run them with a smaller iteration budget.
-    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
+    # Phase 2: layout-only cleanup (bounded).
+    # Arithmetic associativity/commutativity is not bit-exact for floating
+    # point tensors and can violate the correctness gate.
+    opt_rules = get_layout_rules()
     opt_iter = min(3, max_iter)
     opt_stats, opt_blacklist = explore(
         egraph, opt_rules,

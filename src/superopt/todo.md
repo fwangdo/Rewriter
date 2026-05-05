@@ -593,12 +593,12 @@ cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한
 
 | Model | 상태 | 확인 내용 |
 |-------|------|-----------|
-| mobilenetv2 | correctness PASS | 기존 latency 산출물과 재생성 산출물 모두 `max_abs_diff ~= 1e-15` |
-| tinyllama_15m | correctness PASS after fix | invalid Reshape shape 6개를 제거했고, 재생성 결과 `max_abs_diff=3.17e-05` |
-| pythia_70m | old artifact FAIL | 기존 산출물은 `Reshape` target에 `-1`이 여러 개 있어 ORT load 실패. tinyllama와 같은 원인으로 보임 |
-| yolo26_nano | old artifact FAIL | 기존 산출물은 `Resize` optional input 복원 오류로 ORT load 실패 |
-| mobilevit_xxs | unresolved | e-graph 폭발로 산출/검증 미완료 |
-| smollm_135m | unresolved | protobuf 2GB 제한으로 산출/검증 미완료 |
+| mobilenetv2 | correctness PASS | current pipeline: `max_abs_diff=0.0`, 9 cases |
+| mobilevit_xxs | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
+| yolo26_nano | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
+| tinyllama_15m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
+| pythia_70m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
+| smollm_135m | correctness PASS | current pipeline: `max_abs_diff=0.0`, 8 cases |
 
 #### 이번에 확인한 correctness blocker
 
@@ -608,13 +608,24 @@ cost를 사용해 e-graph 안에서 가장 낮은 cost의 graph를 extraction한
 - `tinyllama_15m` old artifact에는 `[-1, 1, 1, -1]`, `[1, 1, -1, -1]`
   같은 invalid shape가 있었다.
 - 해당 rule은 unknown dim이 2개 이상인 target shape에서는 적용하지 않도록 막았다.
+- `Resize`는 optional input position이 의미를 갖는다. IR conversion에서 빈 input을
+  제거하면 `scales`가 `roi` 자리로 밀려 ORT load가 실패한다. 원본 input slot을
+  internal attr로 보존하고 ONNX로 되돌릴 때 빈 slot을 복원하도록 수정했다.
+- `yolo26_nano`는 node/value가 같아도 `value_info` metadata가 줄면 ORT optimization
+  경로가 달라져 작은 numerical drift가 생겼다. 살아 있는 tensor의 원본
+  `value_info`를 보존해 bit-exact correctness를 회복했다.
+- floating-point `Add/Mul` associativity rewrite는 수학적 equality처럼 보여도
+  bit-exact equality가 아니다. correctness gate를 위해 기본 pipeline은
+  arithmetic/fusion phase를 끄고 layout-only cleanup만 수행한다.
+- static `MatMul -> Conv`도 ORT CPU 커널의 누산 순서 차이로 LLM tolerance를
+  넘을 수 있어 현재 rule set에서는 비활성화했다.
 
 #### 다음 할 일
 
-[ ] pythia_70m 재생성 후 ORT correctness 확인
-[ ] yolo26_nano `Resize` optional input round-trip 복원 수정
-[ ] mobilevit_xxs: e-graph 폭발 해결. 규칙별 match 수 프로파일
-[ ] smollm_135m: protobuf 2GB 제한 / IR node 폭발 원인 분석
+[x] pythia_70m 재생성 후 ORT correctness 확인
+[x] yolo26_nano `Resize` optional input round-trip 복원 수정
+[x] mobilevit_xxs current pipeline ORT correctness 확인
+[x] smollm_135m current pipeline ORT correctness 확인
 [ ] latency benchmark를 correctness gate 이후에만 집계하도록 정리
 [ ] paper evaluation section을 latency-first 목표에 맞게 업데이트
 

@@ -19,6 +19,8 @@ from .graph import IRGraph
 from .node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
 _MULTI_OUTPUTS_ATTR = "__outputs"
+_INPUT_SLOTS_ATTR = "__input_slots"
+_NODE_NAME_ATTR = "__node_name"
 
 
 def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
@@ -70,6 +72,10 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     # --- nodes ---
     for node_index, node in enumerate(graph.node):
         attrs = _extract_attrs(node)
+        if node.name:
+            attrs[_NODE_NAME_ATTR] = node.name
+        if any(input_name == "" for input_name in node.input):
+            attrs[_INPUT_SLOTS_ATTR] = tuple(node.input)
         live_outputs = tuple(output for output in node.output if output)
 
         if len(live_outputs) > 1:
@@ -154,6 +160,21 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     def _resolve_inputs(inputs: tuple[str, ...]) -> list[str]:
         return [proj_remap.get(inp, inp) for inp in inputs]
 
+    def _resolve_node_inputs(node: IRNode, attrs: dict[str, Any]) -> list[str]:
+        resolved = _resolve_inputs(node.inputs)
+        input_slots = attrs.pop(_INPUT_SLOTS_ATTR, None)
+        if input_slots is None:
+            return resolved
+
+        resolved_iter = iter(resolved)
+        restored: list[str] = []
+        for slot in input_slots:
+            if slot == "":
+                restored.append("")
+            else:
+                restored.append(next(resolved_iter))
+        return restored
+
     # Build nodes in topological order, skipping leaf/noop/proj ops.
     nodes: list[onnx.NodeProto] = []
     for nid in ir.topo_order():
@@ -162,15 +183,30 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
             continue
         attrs = dict(node.attrs_dict)
         outputs = [node.id]
+        node_name = attrs.pop(_NODE_NAME_ATTR, "")
         if _MULTI_OUTPUTS_ATTR in attrs:
             outputs = list(attrs.pop(_MULTI_OUTPUTS_ATTR))
+        inputs = _resolve_node_inputs(node, attrs)
         onnx_node = onnx.helper.make_node(
             node.op,
-            inputs=_resolve_inputs(node.inputs),
+            inputs=inputs,
             outputs=outputs,
+            name=node_name,
             **_attrs_to_kwargs(attrs),
         )
         nodes.append(onnx_node)
+
+    live_value_names = set()
+    for node in nodes:
+        live_value_names.update(node.input)
+        live_value_names.update(node.output)
+    live_value_names.update(init.name for init in initializers)
+    live_value_names.update(inp.name for inp in graph_inputs)
+    live_value_names.update(out.name for out in graph_outputs)
+    value_info = [
+        vi for vi in ref_graph.value_info
+        if vi.name in live_value_names
+    ]
 
     graph_def = onnx.helper.make_graph(
         nodes,
@@ -178,6 +214,7 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
         graph_inputs,
         graph_outputs,
         initializer=initializers,
+        value_info=value_info,
     )
 
     model = onnx.helper.make_model(graph_def)
