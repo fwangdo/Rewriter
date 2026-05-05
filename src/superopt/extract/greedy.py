@@ -9,16 +9,12 @@ Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from itertools import product
-import logging
 
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
 from ..ir.graph import IRGraph
 from ..ir.node import IRNode
 from .cost import CostModel
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -81,7 +77,9 @@ def extract_topk(
     # e-class in the subtree to the selected e-node for that e-class.
     best: dict[EClassId, list[tuple[float, dict[EClassId, ENode]]]] = {}
 
-    def _signature(choices: dict[EClassId, ENode]) -> tuple[tuple[EClassId, ENode], ...]:
+    def _signature(
+        choices: dict[EClassId, ENode],
+    ) -> tuple[tuple[EClassId, ENode], ...]:
         return tuple(sorted(choices.items(), key=lambda item: item[0]))
 
     for cid in reachable:
@@ -153,7 +151,9 @@ def extract_topk(
 
     root = egraph.find(root_cid)
     return [
-        ExtractedProgram(cost=cost, ir=_build_ir_from_choices(egraph, reachable, choices, root))
+        ExtractedProgram(
+            cost=cost, ir=_build_ir_from_choices(egraph, reachable, choices, root)
+        )
         for cost, choices in best[root][:k]
     ]
 
@@ -210,14 +210,16 @@ def _build_ir_from_choices(
         if nid in ir.nodes:
             nid = f"{nid}__e{cid}"
         ec = egraph.eclass(cid)
-        ir.add_node(IRNode(
-            id=nid,
-            op=enode.op,
-            inputs=tuple(child_ids),
-            attrs=enode.attrs,
-            shape=ec.data.shape,
-            dtype=ec.data.dtype,
-        ))
+        ir.add_node(
+            IRNode(
+                id=nid,
+                op=enode.op,
+                inputs=tuple(child_ids),
+                attrs=enode.attrs,
+                shape=ec.data.shape,
+                dtype=ec.data.dtype,
+            )
+        )
         cid_to_node_id[cid] = nid
 
     root_id = cid_to_node_id[egraph.find(root_cid)]

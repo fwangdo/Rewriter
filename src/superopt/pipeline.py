@@ -6,10 +6,10 @@ ONNX load → shape inference → onnx_to_ir → egglog saturation/extraction
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
 import onnx
 
 from .backends.egglog import EgglogBackend
@@ -26,9 +26,7 @@ from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
 from .rules.legalization import get_legalization_rules
 
-import numpy as np
-
-logger = logging.getLogger(__name__)
+_BOUNDARY_OPS = (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
 
 
 def _hashable_attrs(
@@ -38,15 +36,13 @@ def _hashable_attrs(
 
     numpy arrays are converted to (dtype, shape, bytes) tuples.
     """
-    # TODO: too simple, we need to check it up. 
-    result = []
+    result: list[tuple[str, object]] = []
     for k, v in attrs:
         if isinstance(v, np.ndarray):
             result.append((k, (str(v.dtype), v.shape, v.tobytes())))
-        # TODO: we need to see all attrs. 
         else:
             result.append((k, v))
-    
+
     return tuple(result)
 
 
@@ -72,9 +68,8 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     Returns the e-graph and the e-class id of the root node.
     """
     egraph = EGraph()
-    node_to_cid: dict[str, EClassId] = {} 
+    node_to_cid: dict[str, EClassId] = {}
 
-    # topological order. 
     for nid in ir.topo_order():
         node = ir.nodes[nid]
         children = tuple(node_to_cid[inp] for inp in node.inputs)
@@ -84,14 +79,10 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
         attrs = node.attrs
         if node.op in (OP_INPUT, OP_WEIGHT):
             attrs = (("__name__", nid),)
-        # ENode must be hashable for memo dedup. Convert any numpy
-        # arrays in attrs to bytes so the tuple is hashable.
-
-        # TODO: we have to handle this problem very clearly.
         attrs = _hashable_attrs(attrs)
         enode = ENode(op=node.op, children=children, attrs=attrs)
-        cid = egraph.add(enode) # cid means e-class Id. 
-        node_to_cid[nid] = cid 
+        cid = egraph.add(enode)
+        node_to_cid[nid] = cid
 
         # Propagate analysis data. add() may return an existing e-class, so
         # join instead of overwriting facts from an equivalent node.
@@ -100,21 +91,22 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
             arr = ir.initializers[nid]
             if arr.size == 1:
                 scalar_value = float(arr.reshape(-1)[0])
-        egraph.update_analysis(cid, AnalysisData(
-            shape=node.shape,
-            dtype=node.dtype,
-            is_constant=(node.op == OP_WEIGHT),
-            preferred_name=nid,
-            scalar_value=scalar_value,
-        ))
+        egraph.update_analysis(
+            cid,
+            AnalysisData(
+                shape=node.shape,
+                dtype=node.dtype,
+                is_constant=(node.op == OP_WEIGHT),
+                preferred_name=nid,
+                scalar_value=scalar_value,
+            ),
+        )
 
     # Store initializer data on e-graph so rules can access weight arrays.
     egraph.initializers = dict(ir.initializers)
 
     assert ir.root is not None
     root_cid = node_to_cid[ir.root]
-
-    # sys.exit(1)
     return egraph, root_cid
 
 
@@ -139,11 +131,53 @@ def _attach_initializers(opt_ir: IRGraph, source_ir: IRGraph) -> None:
         raise KeyError(f"missing initializer payload for extracted weight: {name}")
 
 
-def _make_output_model(opt_ir: IRGraph, source_ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
+def _make_output_model(
+    opt_ir: IRGraph,
+    source_ir: IRGraph,
+    ref_model: onnx.ModelProto,
+) -> onnx.ModelProto:
     _attach_initializers(opt_ir, source_ir)
     opt_model = ir_to_onnx(opt_ir, ref_model)
     from .compat import run_post_passes
+
     return run_post_passes(opt_model)
+
+
+def _count_compute_nodes(ir: IRGraph) -> int:
+    return sum(1 for n in ir.nodes.values() if n.op not in _BOUNDARY_OPS)
+
+
+def _load_preprocessed_ir(input_path: str) -> tuple[onnx.ModelProto, IRGraph]:
+    model = onnx.load(input_path)
+    from .compat import run_pre_passes
+
+    model = run_pre_passes(model)
+    return model, onnx_to_ir(model)
+
+
+def _run_egglog(
+    ir: IRGraph,
+    max_iter: int,
+    max_nodes: int,
+) -> tuple[EgglogBackend, ExploreStats]:
+    backend = EgglogBackend(ir)
+
+    explore_stats = backend.run_rules(
+        get_legalization_rules(),
+        max_iter=max_iter,
+        max_nodes=max_nodes,
+    )
+    opt_stats = backend.run_rules(
+        get_arithmetic_rules() + get_layout_rules() + get_fusion_rules(),
+        max_iter=min(3, max_iter),
+        max_nodes=max_nodes,
+    )
+    explore_stats.iterations += opt_stats.iterations
+    explore_stats.total_matches += opt_stats.total_matches
+    explore_stats.total_applied += opt_stats.total_applied
+    explore_stats.final_eclasses = opt_stats.final_eclasses
+    explore_stats.final_enodes = opt_stats.final_enodes
+    return backend, explore_stats
 
 
 def superoptimize(
@@ -158,65 +192,25 @@ def superoptimize(
     All ONNX ops are extractable. The extraction objective is the
     profiled ONNX Runtime latency cost model.
     """
+    del supported_ops
     input_path = str(input_path)
     output_path = str(output_path)
 
-    # Load model. onnx_to_ir performs shape inference once and keeps that
-    # responsibility localized to conversion.
-    model = onnx.load(input_path)
+    model, ir = _load_preprocessed_ir(input_path)
+    original_nodes = _count_compute_nodes(ir)
+    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes)
 
-    # Pre-pass: lower deep-pattern ops (DecoderMask, Trilu) at ONNX level.
-    from .compat import run_pre_passes
-    model = run_pre_passes(model) # constant folding -> decoder mask -> trilu -> constant folding.  
-
-    # ONNX → IR.,
-    ir = onnx_to_ir(model)
-
-    original_nodes = sum(
-        1 for n in ir.nodes.values()
-        # consider meaningful operation only 
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
-    )
-
-    backend = EgglogBackend(ir)
-
-    legalization_rules = get_legalization_rules()
-    explore_stats = backend.run_rules(
-        legalization_rules,
-        max_iter=max_iter,
-        max_nodes=max_nodes,
-    )
-
-    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
-    opt_stats = backend.run_rules(
-        opt_rules,
-        max_iter=min(3, max_iter),
-        max_nodes=max_nodes,
-    )
-    explore_stats.iterations += opt_stats.iterations
-    explore_stats.total_matches += opt_stats.total_matches
-    explore_stats.total_applied += opt_stats.total_applied
-    explore_stats.final_eclasses = opt_stats.final_eclasses
-    explore_stats.final_enodes = opt_stats.final_enodes
-
-    # Extract best program using profiled latency cost model.
-    cost_model = CostModel()
-    extracted = backend.extract_best(cost_model)
+    extracted = backend.extract_best(CostModel())
     opt_ir = extracted.ir
 
     opt_model = _make_output_model(opt_ir, ir, model)
     onnx.save(opt_model, output_path)
 
-    optimized_nodes = sum(
-        1 for n in opt_ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
-    )
-
     return SuperoptResult(
         input_path=input_path,
         output_path=output_path,
         original_nodes=original_nodes,
-        optimized_nodes=optimized_nodes,
+        optimized_nodes=_count_compute_nodes(opt_ir),
         explore_stats=explore_stats,
         estimated_cost=extracted.estimated_cost,
     )
@@ -236,34 +230,9 @@ def superoptimize_topk(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model = onnx.load(input_path)
-    from .compat import run_pre_passes
-    model = run_pre_passes(model)
-
-    ir = onnx_to_ir(model)
-    original_nodes = sum(
-        1 for n in ir.nodes.values()
-        if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
-    )
-
-    backend = EgglogBackend(ir)
-    legalization_rules = get_legalization_rules()
-    explore_stats = backend.run_rules(
-        legalization_rules,
-        max_iter=max_iter,
-        max_nodes=max_nodes,
-    )
-
-    opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
-    opt_stats = backend.run_rules(
-        opt_rules,
-        max_iter=min(3, max_iter), max_nodes=max_nodes,
-    )
-    explore_stats.iterations += opt_stats.iterations
-    explore_stats.total_matches += opt_stats.total_matches
-    explore_stats.total_applied += opt_stats.total_applied
-    explore_stats.final_eclasses = opt_stats.final_eclasses
-    explore_stats.final_enodes = opt_stats.final_enodes
+    model, ir = _load_preprocessed_ir(input_path)
+    original_nodes = _count_compute_nodes(ir)
+    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes)
 
     programs = backend.extract_topk(k=k)
 
@@ -273,16 +242,14 @@ def superoptimize_topk(
         opt_model = _make_output_model(opt_ir, ir, model)
         output_path = output_dir / f"candidate_{index}.onnx"
         onnx.save(opt_model, output_path)
-        optimized_nodes = sum(
-            1 for n in opt_ir.nodes.values()
-            if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
+        results.append(
+            SuperoptResult(
+                input_path=input_path,
+                output_path=str(output_path),
+                original_nodes=original_nodes,
+                optimized_nodes=_count_compute_nodes(opt_ir),
+                explore_stats=explore_stats,
+                estimated_cost=program.estimated_cost,
+            )
         )
-        results.append(SuperoptResult(
-            input_path=input_path,
-            output_path=str(output_path),
-            original_nodes=original_nodes,
-            optimized_nodes=optimized_nodes,
-            explore_stats=explore_stats,
-            estimated_cost=program.estimated_cost,
-        ))
     return results

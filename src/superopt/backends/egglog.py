@@ -133,7 +133,6 @@ _OP_CTORS: dict[int, Callable[..., TensorExpr]] = {
 @dataclass
 class EgglogResult:
     ir: IRGraph
-    stats: ExploreStats
     estimated_cost: float | None = None
 
 
@@ -162,6 +161,8 @@ class OrtCost:
 class EgglogBackend:
     """IRGraph <-> egglog adapter."""
 
+    _IR_NODE_ID_ATTR = "__name__"
+
     def __init__(self, ir: IRGraph) -> None:
         self.ir = ir
         self.egraph = EGraph()
@@ -188,6 +189,8 @@ class EgglogBackend:
         commands = []
         skipped = 0
         for rule in rules:
+            # Rules that need Python-side value inspection or graph synthesis
+            # are not pure egglog rewrites yet. They are ported separately.
             if rule.check is not None or rule.apply_fn is not None:
                 skipped += 1
                 continue
@@ -222,7 +225,6 @@ class EgglogBackend:
         )
         return EgglogResult(
             ir=self._expr_to_ir(expr),
-            stats=ExploreStats(),
             estimated_cost=float(cost),
         )
 
@@ -238,15 +240,17 @@ class EgglogBackend:
             if sig in seen:
                 continue
             seen.add(sig)
-            results.append(EgglogResult(ir=ir, stats=ExploreStats()))
+            results.append(EgglogResult(ir=ir))
         return results
 
     def _load_ir(self) -> None:
         node_to_expr: dict[str, TensorExpr] = {}
         for nid in self.ir.topo_order():
             node = self.ir.nodes[nid]
-            attrs = tuple((k, v) for k, v in node.attrs if k != "__name__")
-            attrs = attrs + (("__name__", nid),)
+            attrs = tuple((k, v) for k, v in node.attrs if k != self._IR_NODE_ID_ATTR)
+            # Preserve the original IR node id so extracted graphs can keep
+            # ONNX output names and initializer names stable.
+            attrs = attrs + ((self._IR_NODE_ID_ATTR, nid),)
             attr_key = self._attrs_key(attrs, node.shape, node.dtype)
             children = tuple(node_to_expr[inp] for inp in node.inputs)
             expr = self._make_expr(node.op, attr_key, children)
@@ -262,6 +266,9 @@ class EgglogBackend:
         shape: tuple[int, ...] | None = None,
         dtype: int | None = None,
     ) -> str:
+        # egglog terms can carry strings cheaply; Python attrs can be numpy
+        # objects or tuples. Keep attrs in Python and store only a stable key
+        # in the egglog term.
         key_attrs = tuple(attrs)
         existing = self._attrs_to_key.get(key_attrs)
         if existing is not None:
@@ -337,27 +344,29 @@ class EgglogBackend:
             child_ids = tuple(visit(child) for child in args[2:])
 
             if op in (OP_INPUT, OP_WEIGHT):
-                node_id = attrs_dict.get("__name__")
+                node_id = attrs_dict.get(self._IR_NODE_ID_ATTR)
                 if not isinstance(node_id, str):
                     node_id = f"{op}_{counter}"
             elif op == OP_NOOP:
                 node_id = "__noop_root__"
             else:
-                node_id = attrs_dict.get("__name__")
+                node_id = attrs_dict.get(self._IR_NODE_ID_ATTR)
                 if not isinstance(node_id, str):
                     node_id = f"_egg_{counter}_{op}"
             counter += 1
 
             if node_id in ir.nodes:
                 node_id = f"{node_id}_{counter}"
-            ir.add_node(IRNode(
-                id=node_id,
-                op=op,
-                inputs=child_ids,
-                attrs=tuple((k, v) for k, v in attrs if k != "__name__"),
-                shape=self._shape_by_key.get(attrs_key),
-                dtype=self._dtype_by_key.get(attrs_key),
-            ))
+            ir.add_node(
+                IRNode(
+                    id=node_id,
+                    op=op,
+                    inputs=child_ids,
+                    attrs=tuple((k, v) for k, v in attrs if k != self._IR_NODE_ID_ATTR),
+                    shape=self._shape_by_key.get(attrs_key),
+                    dtype=self._dtype_by_key.get(attrs_key),
+                )
+            )
             built[key] = node_id
             return node_id
 
