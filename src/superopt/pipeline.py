@@ -1,7 +1,7 @@
 """End-to-end superoptimization pipeline.
 
-ONNX load → shape inference → onnx_to_ir → ir_to_egraph → explore
-→ extract_greedy → ir_to_onnx → save.
+ONNX load → shape inference → onnx_to_ir → egglog saturation/extraction
+→ ir_to_onnx → save.
 """
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from pathlib import Path
 
 import onnx
 
+from .backends.egglog import EgglogBackend
 from .egraph.eclass import AnalysisData
 from .egraph.egraph import EGraph
 from .egraph.enode import EClassId, ENode
-from .explore.explorer import ExploreStats, explore
+from .explore.explorer import ExploreStats
 from .extract.cost import CostModel
-from .extract.greedy import extract_greedy, extract_topk
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
@@ -174,26 +174,21 @@ def superoptimize(
         if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
-    # IR → e-graph.
-    # TODO: checkpoint 2. -> change to egraph.  
-    egraph, root_cid = ir_to_egraph(ir)
+    backend = EgglogBackend(ir)
 
-    # Phase 1: Legalization (decompose complex ops into simpler ones).
-    # These rules are targeted and don't cause combinatorial explosion.
     legalization_rules = get_legalization_rules()
-    explore_stats, blacklist = explore(
-        egraph, legalization_rules,
-        max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
+    explore_stats = backend.run_rules(
+        legalization_rules,
+        max_iter=max_iter,
+        max_nodes=max_nodes,
     )
 
-    # Phase 2: arithmetic/layout/fusion optimization (bounded).
     opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
-    opt_iter = min(3, max_iter)
-    opt_stats, opt_blacklist = explore(
-        egraph, opt_rules,
-        max_iter=opt_iter, max_nodes=max_nodes, root_cid=root_cid,
+    opt_stats = backend.run_rules(
+        opt_rules,
+        max_iter=min(3, max_iter),
+        max_nodes=max_nodes,
     )
-    blacklist |= opt_blacklist
     explore_stats.iterations += opt_stats.iterations
     explore_stats.total_matches += opt_stats.total_matches
     explore_stats.total_applied += opt_stats.total_applied
@@ -202,7 +197,8 @@ def superoptimize(
 
     # Extract best program using profiled latency cost model.
     cost_model = CostModel()
-    opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
+    extracted = backend.extract_best(cost_model)
+    opt_ir = extracted.ir
 
     opt_model = _make_output_model(opt_ir, ir, model)
     onnx.save(opt_model, output_path)
@@ -218,6 +214,7 @@ def superoptimize(
         original_nodes=original_nodes,
         optimized_nodes=optimized_nodes,
         explore_stats=explore_stats,
+        estimated_cost=extracted.estimated_cost,
     )
 
 
@@ -245,27 +242,26 @@ def superoptimize_topk(
         if n.op not in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
     )
 
-    egraph, root_cid = ir_to_egraph(ir)
+    backend = EgglogBackend(ir)
     legalization_rules = get_legalization_rules()
-    explore_stats, blacklist = explore(
-        egraph, legalization_rules,
-        max_iter=max_iter, max_nodes=max_nodes, root_cid=root_cid,
+    explore_stats = backend.run_rules(
+        legalization_rules,
+        max_iter=max_iter,
+        max_nodes=max_nodes,
     )
 
     opt_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
-    opt_stats, opt_blacklist = explore(
-        egraph, opt_rules,
-        max_iter=min(3, max_iter), max_nodes=max_nodes, root_cid=root_cid,
+    opt_stats = backend.run_rules(
+        opt_rules,
+        max_iter=min(3, max_iter), max_nodes=max_nodes,
     )
-    blacklist |= opt_blacklist
     explore_stats.iterations += opt_stats.iterations
     explore_stats.total_matches += opt_stats.total_matches
     explore_stats.total_applied += opt_stats.total_applied
     explore_stats.final_eclasses = opt_stats.final_eclasses
     explore_stats.final_enodes = opt_stats.final_enodes
 
-    cost_model = CostModel()
-    programs = extract_topk(egraph, root_cid, cost_model, k=k, blacklist=blacklist)
+    programs = backend.extract_topk(k=k)
 
     results: list[SuperoptResult] = []
     for index, program in enumerate(programs):
@@ -283,6 +279,6 @@ def superoptimize_topk(
             original_nodes=original_nodes,
             optimized_nodes=optimized_nodes,
             explore_stats=explore_stats,
-            estimated_cost=program.cost,
+            estimated_cost=program.estimated_cost,
         ))
     return results

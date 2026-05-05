@@ -1,0 +1,5 @@
+onnx>=1.21
+numpy>=2.0
+onnxruntime>=1.25
+scipy>=1.14
+egglog>=13.1
