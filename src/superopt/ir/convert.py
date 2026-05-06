@@ -9,11 +9,14 @@ milestone.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
+
+logger = logging.getLogger(__name__)
 
 from .graph import IRGraph
 from .node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
@@ -101,7 +104,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
                 ))
             continue
 
-        assert len(live_outputs) == 1, f'[ERROR]: live_outputs -> {live_outputs}'
+        if len(live_outputs) != 1:
+            raise ValueError(f"expected exactly 1 live output, got {len(live_outputs)}: {live_outputs}")
         output_id = live_outputs[0]  
         ir.add_node(IRNode(
             id=output_id,
@@ -117,9 +121,6 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     noop_id = "__noop_root__"
     ir.add_node(IRNode(id=noop_id, op=OP_NOOP, inputs=output_ids))
     ir.root = noop_id
-
-    # checking. 
-    # ir.show_nodes()
 
     return ir
 
@@ -228,11 +229,10 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     try:
         model = onnx.shape_inference.infer_shapes(model)
         onnx.checker.check_model(model)
-    except Exception:
-        # Checker may fail for intermediate models that still have
-        # unsupported ops or missing shape info. Post-passes
-        # (constant folding + cleanup) will fix and re-validate.
-        pass
+    except Exception as e:
+        # Post-passes (constant folding + cleanup) may fix remaining issues,
+        # but log so failures are visible during debugging.
+        logger.warning("ir_to_onnx: checker/shape_inference failed: %s", e)
     return model
 
 

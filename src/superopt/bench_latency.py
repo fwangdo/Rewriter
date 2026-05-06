@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+import onnx
 import onnxruntime as ort
 
 from src.superopt.validation import (
@@ -31,6 +33,19 @@ MODELS = [
 ]
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def run_baseline(input_path: str, output_path: str) -> bool:
+    """Apply the rule-based onnx_rewrite baseline and save the result."""
+    try:
+        from src.onnx_rewrite.passes.passer import Passer
+        model = onnx.load(input_path)
+        model, _ = Passer().optimize(model)
+        onnx.save(model, output_path)
+        return True
+    except Exception as e:
+        print(f"    baseline FAIL: {e}")
+        return False
 
 
 def run_onnx_optimizer(input_path: str, output_path: str) -> bool:
@@ -118,7 +133,15 @@ def main():
             results.append({"name": name, "domain": domain, "original": {"status": "FAIL"}})
             continue
 
-        # 2. ORT optimizer
+        # 2. Rule-based baseline (onnx_rewrite)
+        bl_path = str(artifacts / f"{name}_baseline.onnx")
+        print("  [baseline] optimizing...")
+        if run_baseline(str(model_path), bl_path):
+            r_bl = evaluate_model("baseline", bl_path, orig_sess, orig_outputs, inputs, domain)
+        else:
+            r_bl = {"status": "FAIL_OPT"}
+
+        # 3. ORT optimizer
         opt_path = str(artifacts / f"{name}_onnxopt.onnx")
         print("  [onnx-opt] optimizing...")
         if run_onnx_optimizer(str(model_path), opt_path):
@@ -126,7 +149,7 @@ def main():
         else:
             r_opt = {"status": "FAIL_OPT"}
 
-        # 3. Superopt top-k
+        # 4. Superopt top-k
         so_dir = str(artifacts / f"{name}_candidates")
         print(f"  [superopt] optimizing (top-5, iter={max_iter}, nodes={max_nodes})...")
         candidates = run_superopt_topk(str(model_path), so_dir, k=5,
@@ -148,27 +171,34 @@ def main():
             "name": name,
             "domain": domain,
             "original_ms": orig_lat,
+            "baseline": r_bl,
             "onnxopt": r_opt,
             "superopt": r_so,
         })
 
     # Summary table
-    print(f"\n{'='*90}")
-    print(f"{'Model':<18} {'Original':>10} {'ORT-Opt':>10} {'Superopt':>10} {'SO/Orig':>10} {'Correctness':>12}")
-    print(f"{'-'*90}")
+    print(f"\n{'='*104}")
+    print(f"{'Model':<18} {'Original':>10} {'Baseline':>10} {'ORT-Opt':>10} {'Superopt':>10} {'SO/Orig':>10} {'SO/BL':>10} {'Correct':>10}")
+    print(f"{'-'*104}")
     for r in results:
         orig = f"{r.get('original_ms', 0):.2f}"
+        bl = r.get("baseline", {})
         oopt = r.get("onnxopt", {})
         so = r.get("superopt", {})
+        bl_str = f"{bl['latency_ms']:.2f}" if bl.get("status") == "OK" else bl.get("status", "FAIL")
         oopt_str = f"{oopt['latency_ms']:.2f}" if oopt.get("status") == "OK" else oopt.get("status", "FAIL")
         so_str = f"{so['latency_ms']:.2f}" if so.get("status") == "OK" else so.get("status", "FAIL")
         if so.get("status") == "OK" and r.get("original_ms"):
             ratio = f"{so['latency_ms'] / r['original_ms']:.3f}"
         else:
             ratio = "-"
+        if so.get("status") == "OK" and bl.get("status") == "OK":
+            bl_ratio = f"{so['latency_ms'] / bl['latency_ms']:.3f}"
+        else:
+            bl_ratio = "-"
         corr = "PASS" if so.get("status") == "OK" else "FAIL"
-        print(f"{r['name']:<18} {orig:>10} {oopt_str:>10} {so_str:>10} {ratio:>10} {corr:>12}")
-    print(f"{'='*90}")
+        print(f"{r['name']:<18} {orig:>10} {bl_str:>10} {oopt_str:>10} {so_str:>10} {ratio:>10} {bl_ratio:>10} {corr:>10}")
+    print(f"{'='*104}")
 
     out_json = artifacts / "latency_results.json"
     with open(out_json, "w") as f:

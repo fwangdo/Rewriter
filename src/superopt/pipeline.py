@@ -63,11 +63,12 @@ class SuperoptResult:
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
-    """Convert an IRGraph into the legacy hand-rolled e-graph.
+    """Convert an IRGraph into the hand-rolled e-graph.
 
-    The primary saturation/extraction backend is egglog. This path is used
-    only as a rough bridge for legacy check/apply_fn rules that still need
-    Python-side value inspection or graph synthesis.
+    The primary saturation/extraction backend is egglog.  This path handles
+    rules with ``check`` or ``apply_fn`` callbacks that require Python-side
+    value inspection or synthetic constant generation — capabilities not yet
+    exposed through egglog's Python API.
 
     Returns the e-graph and the e-class id of the root node.
     """
@@ -109,7 +110,8 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     # Store initializer data on e-graph so rules can access weight arrays.
     egraph.initializers = dict(ir.initializers)
 
-    assert ir.root is not None
+    if ir.root is None:
+        raise ValueError("IRGraph has no root node")
     root_cid = node_to_cid[ir.root]
     return egraph, root_cid
 
@@ -169,11 +171,13 @@ def _run_legacy_callback_bridge(
     max_iter: int,
     max_nodes: int,
 ) -> tuple[IRGraph, ExploreStats]:
-    """Materialize legacy callback rules before handing the graph to egglog.
+    """Run callback rules through the hand-rolled e-graph before egglog.
 
-    egglog handles pure pattern rewrites. Rules with ``check`` or ``apply_fn``
-    still rely on Python code for shape/value checks and synthetic constants,
-    so this bridge runs only those rules through the old e-graph once.
+    egglog handles pure pattern rewrites.  Rules with ``check`` or ``apply_fn``
+    require Python-side value inspection or synthetic constant generation,
+    which egglog's Python API does not support.  This bridge runs those
+    rules through the hand-rolled e-graph in a single pass, then returns the
+    materialized IR for subsequent egglog saturation.
     """
     stats = ExploreStats()
     if max_iter <= 0:
@@ -204,6 +208,7 @@ def _run_egglog(
     ir: IRGraph,
     max_iter: int,
     max_nodes: int,
+    supported_ops: frozenset[str] | None = None,
 ) -> tuple[EgglogBackend, ExploreStats]:
     backend = EgglogBackend(ir)
 
@@ -244,10 +249,11 @@ def superoptimize(
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
     ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes)
-    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes)
+    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
     _merge_stats(bridge_stats, explore_stats)
 
-    extracted = backend.extract_best(CostModel())
+    cost_model = CostModel(supported_ops=supported_ops)
+    extracted = backend.extract_best(cost_model)
     opt_ir = extracted.ir
 
     opt_model = _make_output_model(opt_ir, ir, model)
@@ -286,10 +292,11 @@ def superoptimize_topk(
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
     ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes)
-    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes)
+    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
     _merge_stats(bridge_stats, explore_stats)
 
-    programs = backend.extract_topk(k=k)
+    cost_model = CostModel(supported_ops=supported_ops)
+    programs = backend.extract_topk(k=k, cost_model=cost_model)
 
     results: list[SuperoptResult] = []
     for index, program in enumerate(programs):

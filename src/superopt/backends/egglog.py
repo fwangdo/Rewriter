@@ -3,6 +3,12 @@
 This module replaces the hand-rolled e-graph engine on the main pipeline
 path. It keeps ONNX/IR-specific materialization in Python, but delegates
 congruence closure, rule application, and extraction to egglog.
+
+Limitations of the current egglog integration:
+- ``max_nodes`` is not enforced (egglog's Python API lacks a node budget).
+- Rules with ``check`` or ``apply_fn`` callbacks cannot be expressed as
+  pure egglog rewrites and are handled by a separate legacy callback
+  bridge (see ``pipeline._run_legacy_callback_bridge``).
 """
 
 from __future__ import annotations
@@ -179,9 +185,11 @@ class EgglogBackend:
         self,
         rules: list[RewriteRule],
         max_iter: int,
-        max_nodes: int,
+        max_nodes: int,  # noqa: ARG002 — reserved for future node-budget support
     ) -> ExploreStats:
-        del max_nodes
+        # NOTE: max_nodes is accepted for API compatibility with the legacy
+        # backend but not yet enforced.  egglog does not expose a node-count
+        # limit in its Python API; saturation is bounded by max_iter only.
         stats = ExploreStats()
         if max_iter <= 0:
             stats.saturated = False
@@ -232,10 +240,14 @@ class EgglogBackend:
         expr = self.egraph.extract(self.root)
         return EgglogResult(ir=self._expr_to_ir(expr))
 
-    def extract_topk(self, k: int) -> list[EgglogResult]:
+    def extract_topk(
+        self, k: int, cost_model: CostModel | None = None,
+    ) -> list[EgglogResult]:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
-        best = self.extract_best(CostModel())
+        if cost_model is None:
+            cost_model = CostModel()
+        best = self.extract_best(cost_model)
         if k <= 1:
             return [best]
         # extract_multiple currently has no cost-model hook in egglog's Python
@@ -254,7 +266,9 @@ class EgglogBackend:
             if sig in seen:
                 continue
             seen.add(sig)
-            results.append(EgglogResult(ir=ir))
+            results.append(
+                EgglogResult(ir=ir, estimated_cost=_ir_cost(ir, cost_model)),
+            )
             if len(results) >= k:
                 break
         return results

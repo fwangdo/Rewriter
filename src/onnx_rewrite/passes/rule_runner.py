@@ -40,6 +40,8 @@ class RuleRunner(Folder):
                 if not changed:
                     continue
                 self.log.append(f"{spec.name}: rewrote {node.name or node.output[0]}")
+                # Rebuild indexes so subsequent iterations see the new graph state.
+                self._parse_relation()
                 break
         self.remove_marked_nodes()
         return model, self.log

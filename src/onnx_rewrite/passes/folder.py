@@ -1,9 +1,13 @@
 from __future__ import annotations
+
+import logging
 from typing import Dict, Iterable, List
 
 import numpy as np
 import onnx
 from onnx import numpy_helper
+
+logger = logging.getLogger(__name__)
 
 
 class Folder:
@@ -95,8 +99,6 @@ class Folder:
                 if output_name in self.producer_by_output:
                     raise ValueError(f"duplicate ONNX value producer for '{output_name}'")
                 self.producer_by_output[output_name] = node
-        
-        return 
 
     @property
     def producer(self) -> Dict[str, onnx.NodeProto]:
@@ -168,7 +170,8 @@ class Folder:
         """
         try:
             inferred = onnx.shape_inference.infer_shapes(model)
-        except Exception:
+        except Exception as e:
+            logger.debug("shape inference failed, using original model shapes: %s", e)
             inferred = model
 
         shape_info: Dict[str, List] = {}

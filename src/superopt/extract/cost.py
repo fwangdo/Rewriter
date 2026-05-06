@@ -222,13 +222,19 @@ class CostModel:
 
     Prefers FLOPs estimate when shape information is available.
     Falls back to per-op average latency from ORT profiling.
-    All ops are legal — no supported-op filtering.
+    When *supported_ops* is provided, unsupported ops receive a heavy
+    penalty so that extraction avoids them.
     """
 
-    def __init__(self, cost_table: dict[str, float] | None = None) -> None:
+    def __init__(
+        self,
+        cost_table: dict[str, float] | None = None,
+        supported_ops: frozenset[str] | None = None,
+    ) -> None:
         if cost_table is None:
             cost_table = load_cost_table()
         self._table = cost_table
+        self._supported_ops = supported_ops
         if cost_table:
             values = sorted(cost_table.values())
             self._default = values[len(values) // 2]
@@ -244,6 +250,9 @@ class CostModel:
         if enode.op in _FREE_OPS:
             return 0.0
 
+        if self._supported_ops is not None and enode.op not in self._supported_ops:
+            return 1e9  # heavy penalty for unsupported ops
+
         flops = estimate_flops(enode.op, output_shape, input_shapes, enode.attrs)
         if flops is not None:
             # Scale FLOPs to microseconds-like range so it's comparable
@@ -256,5 +265,9 @@ class CostModel:
         return self._table.get(enode.op, self._default)
 
     def is_legal(self, enode: ENode) -> bool:
-        """All ops are legal — we optimize purely for latency."""
-        return True
+        """Check whether an op is legal under the supported-op contract."""
+        if self._supported_ops is None:
+            return True
+        if enode.op in _FREE_OPS:
+            return True
+        return enode.op in self._supported_ops

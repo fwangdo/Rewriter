@@ -67,6 +67,10 @@ E-graph(equality saturation) 기반 탐색으로, rule-based baseline과 동일�
 3. Legalization + optimization을 동시에 탐색하면 rule-based보다 더 좋은 동등 그래프를 발견할 수 있다
 4. Graph rewrite는 단순 성능 최적화를 넘어서 **target adaptation** 역할을 한다
 
+## How It Works
+
+아키텍처, 실행 방법, 규칙 추가 방법 등은 [how.md](how.md)를 참조.
+
 ## Related Work
 
 - **Tensat** (MLSys 2021): e-graph 기반 tensor graph superoptimization. 고정 backend 가정, legalization 없음.
