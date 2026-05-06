@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import onnx
 
-from src.common.rules import get_pure_legalization_specs
+from src.common.rules import get_legalization_specs
 
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
@@ -35,7 +35,7 @@ class Passer:
             RewriteGather(),
             ConstantFolding(),
             EliminateId(),
-            RuleRunner(get_pure_legalization_specs()),
+            RuleRunner(get_legalization_specs()),
             RewriteClip(),
             RewriteCompare(),
             RewriteMetaReshape(),
