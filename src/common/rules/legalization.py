@@ -320,21 +320,12 @@ def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> obj
         return builder.get_match()
 
     a_shape = builder.get_shape("?a")
-    if a_shape is None or len(a_shape) not in (2, 3):
+    if a_shape is None or len(a_shape) != 2:
         return builder.get_match()
 
     k_size, n_size = w_data.shape
     conv_weight = w_data.T.reshape(n_size, k_size, 1, 1).astype(np.float32)
     conv_w = builder.add_array(conv_weight, f"__matmul_conv_w_{id(conv_weight)}")
-
-    if len(a_shape) == 3:
-        t1 = builder.add_op("Transpose", [vars["?a"]], attrs={"perm": (0, 2, 1)})
-        axes = builder.add_array(np.array([3], dtype=np.int64), "__unsq_axes_3", dtype_code=7)
-        unsqueezed = builder.add_op("Unsqueeze", [t1, axes])
-        conv = builder.add_op("Conv", [unsqueezed, conv_w], attrs={"kernel_shape": (1, 1)})
-        t2 = builder.add_op("Transpose", [conv], attrs={"perm": (0, 2, 1, 3)})
-        reshape_shape = builder.add_array(np.array([0, 0, -1], dtype=np.int64), "__reshape_00n1", dtype_code=7)
-        return builder.add_op("Reshape", [t2, reshape_shape])
 
     reshape_in_shape = builder.add_array(np.array([1, 0, -1, 1], dtype=np.int64), "__reshape_10n11", dtype_code=7)
     reshape_in = builder.add_op("Reshape", [vars["?a"], reshape_in_shape])
