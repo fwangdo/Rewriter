@@ -727,82 +727,125 @@ Correctness 기준: Gawee 동일 — `np.allclose(orig, opt, atol, rtol=1e-4)`
 
 #### egglog 전환 상태 (2026-05-06)
 
-결정:
-- 자체 구현한 `EGraph.add/merge/rebuild`를 main pipeline에서 계속 신뢰하지 않는다.
-- e-graph 엔진은 egglog로 전환한다.
-- ONNX/IR materialization, ORT correctness, ORT latency validation은 우리 코드에 남긴다.
+이 섹션은 Claude와 상태 공유용이다. Claude가 알고 있던 "자체 e-class 기반
+superopt" 상태는 outdated다.
 
-현재 반영:
-- `pipeline.py`는 `EgglogBackend`를 통해 saturation/extraction을 수행한다.
-- egglog backend 위치는 `src/superopt/backends/egglog.py`.
-- `requirements.txt`에 `egglog>=13.1` 추가.
-- outdated smoke runner였던 `src/superopt/check.py`, `src/superopt/check.sh`는 삭제했다.
-  - 이유: 이 runner는 `ir_to_egraph -> explore -> extract_greedy` checkpoint를
-    직접 호출해서 현재 egglog main path를 검증하지 않는다.
-- 기존 자체 e-graph 구현 파일은 아직 삭제하지 않았다.
-  - 이유: `RewriteRule`, `PatternNode`, 일부 analysis/check/apply_fn 코드가 아직
-    이 타입들에 의존한다.
-  - 다음 단계에서 rule 표현과 legalization 포팅이 끝나면 삭제/격리한다.
-- legacy 표시를 추가했다.
+**한 줄 요약**
+
+- main path는 더 이상 자체 `EGraph.add/merge/rebuild` 중심이 아니다.
+- 현재 main path는 `legacy callback bridge -> egglog backend -> ONNX materialization
+  -> ORT correctness/latency validation`이다.
+- easy-4(`mobilenetv2`, `yolo26_nano`, `mobilevit_xxs`, `tinyllama_15m`)는
+  `max_iter=1, k=1`에서 후보 생성과 ORT correctness를 통과한다.
+- 하지만 latency 기준의 "성공적인 최적화"는 아직 아니다. 현재 가장 큰 병목은
+  cost model / candidate validation이다.
+
+**현재 실행 경로**
+
+```
+ONNX model
+  -> compat.run_pre_passes()
+  -> onnx_to_ir()
+  -> _run_legacy_callback_bridge()
+       - legacy EGraph 사용
+       - check/apply_fn 기반 legalization rule만 materialize
+       - 예: Squeeze/Unsqueeze -> Reshape, MatMul -> Conv, Gemm decomposition
+  -> EgglogBackend
+       - pure pattern rewrite 등록
+       - egglog extraction
+  -> _expr_to_ir()
+  -> ir_to_onnx()
+  -> compat.run_post_passes()
+  -> ORT load/correctness/latency
+```
+
+**코드 위치**
+
+- egglog backend: `src/superopt/backends/egglog.py`
+- main pipeline: `src/superopt/pipeline.py`
+- legacy e-graph bridge:
   - `src/superopt/egraph/egraph.py`
   - `src/superopt/explore/explorer.py`
   - `src/superopt/extract/greedy.py`
-  - `src/superopt/extract/ilp.py`
-  - `pipeline.py`의 `ir_to_egraph()`
-- `src/superopt/extract/__init__.py`에서는 더 이상 legacy `extract_greedy`를
-  public export하지 않는다.
-- 현재는 거친 bridge를 둔다.
-  - `check`/`apply_fn` 기반 legalization rule은 legacy e-graph에서 먼저
-    materialize한다.
-  - 그 결과 IR을 다시 egglog backend에 넣어 pure rewrite/extraction을 수행한다.
-  - 최종 설계는 아니지만 기존 Python-side shape/value/synthetic constant logic을
-    egglog main path에서 다시 사용할 수 있게 한다.
+- rule definitions:
+  - `src/superopt/rules/base.py`
+  - `src/superopt/rules/legalization.py`
+  - `src/superopt/rules/arithmetic.py`
+  - `src/superopt/rules/layout.py`
+  - `src/superopt/rules/fusion.py`
 
-현재 gap:
-- egglog로 바로 등록되는 rule은 pure pattern rewrite뿐이다.
-  - 예: `Add(x,y)->Add(y,x)`, `Reshape(Reshape(x,y),z)->Reshape(x,z)`
-- 기존 `check`/`apply_fn` 기반 rule은 egglog-native rule은 아니며 bridge에서 처리된다.
-  - 예: `Pow` exponent 값 확인, `Squeeze/Unsqueeze -> Reshape` shape 생성,
-    `LayerNorm` decomposition, `Gemm` decomposition, `MatMul -> Conv`.
-- 즉 현재 경로는 "legacy callback materialization -> egglog pure rewrite/extraction"이다.
-  latency에 중요한 synthetic constant/weight 변환 rule은 동작하지만 egglog-native
-  포팅은 아직 전이다.
+**삭제/정리된 것**
 
-Bridge smoke:
-- model: `mobilenetv2`
-- command: `superoptimize_topk(..., max_iter=1, max_nodes=5000, k=1)`
-- result: original nodes 100, extracted nodes 100, iterations 3, applied 13
-- ORT correctness: PASS, max_abs_diff=0.0
-- latency: 약 11.41ms
+- `src/superopt/check.py`, `src/superopt/check.sh` 삭제.
+  - 이유: old `ir_to_egraph -> explore -> extract_greedy` checkpoint runner라
+    현재 egglog main path를 검증하지 못한다.
+- `src/superopt/extract/__init__.py`는 더 이상 legacy `extract_greedy`를 public
+  export하지 않는다.
+- 자체 e-graph 구현은 삭제하지 않았다.
+  - 이유: `check`/`apply_fn` 기반 rule이 아직 Python-side shape/value/weight
+    synthesis를 위해 legacy EGraph 타입에 의존한다.
 
-Easy-4 smoke after egglog extraction fix:
-- 공통 설정: `superoptimize_topk(..., max_iter=0, max_nodes=5000, k=1)`
-- `mobilenetv2`: PASS, 100 -> 100 nodes, max_abs_diff=0.0, latency 약 11.22ms
-- `yolo26_nano`: PASS, 397 -> 397 nodes, max_abs_diff=0.0, latency 약 92.72ms
-- `mobilevit_xxs`: PASS, 417 -> 417 nodes, max_abs_diff=0.0, latency 약 12.78ms
-- `tinyllama_15m`: PASS, 765 -> 730 nodes, max_abs_diff=0.0, latency 약 46.59ms
+**egglog backend에서 이미 고친 문제**
 
-이번에 규명한 병목:
-- `yolo26_nano`/`mobilevit_xxs`가 느렸던 직접 원인은 egglog extraction 자체가
-  아니라 `_expr_to_ir()`에서 memo key로 `repr(expr)`를 사용한 것이다.
-- 큰 expression에서 `repr()`가 subtree 문자열을 반복 생성해 10초 이상 걸렸다.
-- egglog `RuntimeExpr` 자체가 hash 가능하므로 memo key를 expression object로
-  바꾸자 `_expr_to_ir()`가 yolo 기준 약 10초 timeout -> 약 0.017초로 줄었다.
-- 추가로 high-arity root(`noop/13`, `noop/61`)는 internal `__tuple__` term으로
-  packing/unpacking해 egglog arity 제한을 우회한다.
+- high-arity root 문제:
+  - NLP 모델은 root `noop`이 output 13개/61개를 받을 수 있다.
+  - egglog constructor arity는 제한되어 있으므로 internal `__tuple__` term으로
+    packing/unpacking한다.
+- numpy ndarray attr hash 문제:
+  - egglog attr key dict에 ndarray가 들어가면 unhashable.
+  - `(dtype, shape, bytes)`로 변환한다.
+- `_expr_to_ir()` 성능 문제:
+  - 이전에는 memo key로 `repr(expr)`를 사용했다.
+  - 큰 expression에서 subtree 문자열을 반복 생성해 `yolo26_nano` 기준 10초 이상
+    걸렸다.
+  - `RuntimeExpr` 자체를 memo key로 쓰자 `_expr_to_ir()`가 약 0.017초로 줄었다.
+- deep term recursion 문제:
+  - egglog Python binding이 extracted term DAG를 recursive하게 Python expression으로
+    복원한다.
+  - `tinyllama_15m`에서 Python recursion limit에 걸렸고, extraction 전
+    recursion limit을 10000으로 올려 해결했다.
 
-다음 할 일:
-[ ] `RewriteRule`을 egglog-native rule 표현으로 재정리
-[ ] `check` 기반 rule을 egglog analysis/facts 또는 Python pre-filter 방식으로 포팅
-[ ] `apply_fn` 기반 rule을 "candidate graph synthesis" 단계로 분리할지,
-    egglog function/action으로 표현할지 결정
-[ ] 우선순위 1: `MatMul -> Conv` 포팅 후 top-k validation으로 correctness gate
-[ ] 우선순위 2: `Gemm -> MatMul/Add`, ORT fusion을 깨지 않는 방향으로 재검토
-[ ] 우선순위 3: `LayerNorm` decomposition은 latency-first 목표에서는 기본 off 또는
-    validation 후보로만 취급
-[ ] egglog `extract_multiple` 후보에 대해 materialized ONNX graph hash dedup 추가
-[ ] egglog extraction cost를 `greedy_dag_cost_model(ORT cost)`로 통일하고,
-    top-k 후보의 estimated cost도 기록
+**Easy-4 현재 결과 (`max_iter=1`, `max_nodes=10000`, `k=1`)**
+
+| Model | Graph change | Correctness | Latency note |
+|-------|--------------|-------------|--------------|
+| `mobilenetv2` | 변화 없음 | PASS, max_diff=0.0 | 원본과 거의 동일 |
+| `yolo26_nano` | `Squeeze/Unsqueeze -> Reshape` | PASS, max_diff=0.0 | 거의 동일/약간 느림 |
+| `mobilevit_xxs` | `MatMul -> Conv` 35개 | PASS, max_diff=0.0 | 느려짐 |
+| `tinyllama_15m` | `MatMul -> Conv` 39개 등 | PASS, max_diff≈2.44e-05 | 느려짐 |
+
+측정 예:
+- `mobilenetv2`: original 약 11.44ms, candidate 약 11.38ms
+- `yolo26_nano`: original 약 87.77ms, candidate 약 88.18ms
+- `mobilevit_xxs`: original 약 12.76ms, candidate 약 13.30ms
+- `tinyllama_15m`: original 약 45.09ms, candidate 약 47.08ms
+
+**중요한 해석**
+
+- 현재 easy-4는 "egglog 경로가 graph를 만들고 correctness를 통과한다"까지는 왔다.
+- 그러나 "latency가 개선된다"는 단계는 아니다.
+- `mobilevit_xxs`, `tinyllama_15m`에서 cost model이 `MatMul -> Conv`를 선호하지만,
+  실제 ORT CPU latency는 느려진다.
+- 즉 현재 가장 큰 문제는 e-graph/egglog correctness가 아니라 cost model이
+  실제 latency를 잘 예측하지 못하는 것이다.
+- `mobilenetv2`는 current cost 기준으로 원본 `Clip`이 선택된다. 강제로
+  `Clip -> Min(Max())`를 뽑으면 correctness는 PASS지만 latency가 느려진다.
+  따라서 graph change를 억지로 만드는 것은 최적화가 아니다.
+- egglog `extract_multiple(root, k)`만으로는 child e-class 내부 대안을 충분히
+  top-k 후보로 끌어올리지 못한다. materialized graph 후보 생성 전략이 별도로 필요하다.
+
+**다음 우선순위**
+
+[ ] easy-4에서 candidate generation을 "estimated cost 1개"가 아니라
+    "여러 materialized variant + ORT measured latency validation"으로 바꾼다.
+[ ] `MatMul -> Conv`는 shape-aware 또는 measured validation 없이 cost만 보고
+    선택하지 않도록 한다.
+[ ] op 평균 cost model을 shape/context-aware cost로 바꾼다.
+[ ] `extract_multiple(root,k)`에 의존하지 말고, rule subset/forced variant/beam 방식으로
+    실제로 다른 ONNX graph 후보를 만들고 hash dedup한다.
+[ ] `mobilenetv2`처럼 현재 rule set에서 latency 개선 후보가 없는 모델은
+    "no beneficial rewrite found"로 판단할 수 있게 한다.
+[ ] `pythia_70m`, `smollm_135m`는 easy-4 이후 별도 확장 대상으로 둔다.
 
 ---
 
