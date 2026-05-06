@@ -1,0 +1,137 @@
+"""Run common RuleSpec pure pattern rewrites on ONNX graphs."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import onnx
+from onnx import helper
+
+from src.common.rules import PatternSpec, RuleSpec
+
+from .folder import Folder
+
+
+class RuleRunner(Folder):
+    """Apply backend-agnostic pure pattern rules to an ONNX graph.
+
+    This runner intentionally supports only single-node source patterns for
+    now. Deeper producer-chain rewrites remain in the existing specialized
+    passes until the common rule format proves stable.
+    """
+
+    def __init__(self, specs: list[RuleSpec]) -> None:
+        super().__init__()
+        self.specs = [
+            spec
+            for spec in specs
+            if spec.target is not None and spec.build_fn is None and not spec.checks
+        ]
+
+    def run(self, model: onnx.ModelProto) -> tuple[onnx.ModelProto, list[str]]:
+        self.prepare(model)
+        for node in list(self.graph.node):
+            if node in self.nodes_to_remove:
+                continue
+            for spec in self.specs:
+                subst = self._match_node(node, spec.source)
+                if subst is None:
+                    continue
+                self._apply(node, spec, subst)
+                self.log.append(f"{spec.name}: rewrote {node.name or node.output[0]}")
+                break
+        self.remove_marked_nodes()
+        return model, self.log
+
+    def _match_node(
+        self,
+        node: onnx.NodeProto,
+        pattern: PatternSpec,
+    ) -> dict[str, str] | None:
+        if node.op_type != pattern.op or len(node.input) != len(pattern.args):
+            return None
+        if pattern.attrs is not None:
+            node_attrs = {attr.name: helper.get_attribute_value(attr) for attr in node.attribute}
+            for key, expected in pattern.attrs:
+                if node_attrs.get(key) != expected:
+                    return None
+        subst: dict[str, str] = {}
+        for arg, input_name in zip(pattern.args, node.input):
+            if not isinstance(arg, str):
+                return None
+            if not arg.startswith("?"):
+                return None
+            prev = subst.get(arg)
+            if prev is not None and prev != input_name:
+                return None
+            subst[arg] = input_name
+        return subst
+
+    def _apply(
+        self,
+        node: onnx.NodeProto,
+        spec: RuleSpec,
+        subst: dict[str, str],
+    ) -> None:
+        assert spec.target is not None
+        if isinstance(spec.target, str):
+            replacement = subst[spec.target]
+            self._replace_value(node.output[0], replacement)
+            self.mark_for_removal(node)
+            return
+
+        new_nodes: list[onnx.NodeProto] = []
+        final_value = self._emit_target(
+            spec.target,
+            subst,
+            node,
+            new_nodes,
+            output_name=node.output[0],
+        )
+        if final_value != node.output[0]:
+            self._replace_value(node.output[0], final_value)
+        self.replace_node(node, new_nodes)
+
+    def _emit_target(
+        self,
+        target: PatternSpec | str,
+        subst: dict[str, str],
+        source_node: onnx.NodeProto,
+        out_nodes: list[onnx.NodeProto],
+        output_name: str | None = None,
+    ) -> str:
+        if isinstance(target, str):
+            return subst[target]
+
+        inputs = [
+            self._emit_target(arg, subst, source_node, out_nodes)
+            if isinstance(arg, PatternSpec)
+            else subst[arg]
+            for arg in target.args
+        ]
+        prefix = self.get_prefix(source_node)
+        out_name = output_name or self.tensor_name(prefix, f"{target.op.lower()}_{len(out_nodes)}")
+        attrs = dict(target.attrs or ())
+        out_nodes.append(
+            helper.make_node(
+                target.op,
+                inputs,
+                [out_name],
+                name=self.node_name(prefix, f"{target.op.lower()}_{len(out_nodes)}"),
+                **_onnx_attrs(attrs),
+            )
+        )
+        return out_name
+
+    def _replace_value(self, old: str, new: str) -> None:
+        for consumer in self.get_consumers(old):
+            for index, input_name in enumerate(consumer.input):
+                if input_name == old:
+                    consumer.input[index] = new
+        for output in self.graph.output:
+            if output.name == old:
+                output.name = new
+
+
+def _onnx_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    return {key: list(value) if isinstance(value, tuple) else value for key, value in attrs.items()}

@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import onnx
 
+from src.common.rules import get_pure_legalization_specs
+
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
 from .convert_matmul import ConvertMatmul
 from .eliminate_id import EliminateId
+from .rule_runner import RuleRunner
 from .rewrite_bn import RewriteBN
 from .rewrite_clip import RewriteClip
 from .rewrite_compare import RewriteCompare
@@ -32,6 +35,7 @@ class Passer:
             RewriteGather(),
             ConstantFolding(),
             EliminateId(),
+            RuleRunner(get_pure_legalization_specs()),
             RewriteClip(),
             RewriteCompare(),
             RewriteMetaReshape(),

@@ -12,7 +12,10 @@ and legality constraints.
 
 from __future__ import annotations
 
+from src.common.rules import get_pure_legalization_specs
+
 from .base import RewriteRule
+from .wrapper import rulespecs_to_rewrites
 from ..egraph.enode import EClassId, ENode
 from ..egraph.egraph import EGraph
 from ..egraph.pattern import PatternNode, PatternVar, Subst
@@ -23,12 +26,9 @@ def get_legalization_rules() -> list[RewriteRule]:
     x = PatternVar("?x")
     a = PatternVar("?a")
     b = PatternVar("?b")
-    y = PatternVar("?y")
     e = PatternVar("?e")
     scale = PatternVar("?scale")
     bias = PatternVar("?bias")
-    clip_min = PatternVar("?min")
-    clip_max = PatternVar("?max")
     cond = PatternVar("?cond")
     true_val = PatternVar("?true")
     false_val = PatternVar("?false")
@@ -41,14 +41,7 @@ def get_legalization_rules() -> list[RewriteRule]:
     bn_v = PatternVar("?bn_v")
     w = PatternVar("?w")
 
-    rules: list[RewriteRule] = []
-
-    # --- F2: eliminate_identity: Identity(x) → x ---
-    rules.append(RewriteRule(
-        name="eliminate_identity",
-        source=PatternNode("Identity", (x,)),
-        target=x,
-    ))
+    rules: list[RewriteRule] = rulespecs_to_rewrites(get_pure_legalization_specs())
 
     # --- neg_to_mul: Neg(x) → Mul(x, Constant(-1)) ---
     rules.append(RewriteRule(
@@ -56,20 +49,6 @@ def get_legalization_rules() -> list[RewriteRule]:
         source=PatternNode("Neg", (x,)),
         target=PatternNode("Neg", (x,)),  # placeholder, apply_fn overrides
         apply_fn=_apply_neg_to_mul,
-    ))
-
-    # --- greater_to_less: Greater(a, b) → Less(b, a) ---
-    rules.append(RewriteRule(
-        name="greater_to_less",
-        source=PatternNode("Greater", (a, b)),
-        target=PatternNode("Less", (b, a)),
-    ))
-
-    # --- sub_to_add_neg: Sub(x, y) → Add(x, Neg(y)) ---
-    rules.append(RewriteRule(
-        name="sub_to_add_neg",
-        source=PatternNode("Sub", (x, y)),
-        target=PatternNode("Add", (x, PatternNode("Neg", (y,)))),
     ))
 
     # --- squeeze_to_reshape: Squeeze(x, axes) → Reshape(x, shape) ---
@@ -141,14 +120,6 @@ def get_legalization_rules() -> list[RewriteRule]:
         source=PatternNode("LayerNormalization", (x, scale, bias)),
         target=PatternNode("LayerNormalization", (x, scale, bias)),  # placeholder
         apply_fn=_apply_layernorm_decompose,
-    ))
-
-    # --- F5: Clip decomposition ---
-    # Clip(x, min, max) → Min(Max(x, min), max)
-    rules.append(RewriteRule(
-        name="clip_decompose",
-        source=PatternNode("Clip", (x, clip_min, clip_max)),
-        target=PatternNode("Min", (PatternNode("Max", (x, clip_min)), clip_max)),
     ))
 
     # --- F6: WhereMask decomposition ---

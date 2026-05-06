@@ -6,43 +6,12 @@ These are basic equality rules that any e-graph optimizer should have.
 
 from __future__ import annotations
 
+from src.common.rules import get_arithmetic_specs
+
 from .base import RewriteRule
-from ..egraph.pattern import PatternNode, PatternVar
+from .wrapper import rulespecs_to_rewrites
 
 
 def get_arithmetic_rules() -> list[RewriteRule]:
     """Return the standard arithmetic rewrite rules."""
-    x = PatternVar("?x")
-    y = PatternVar("?y")
-
-    rules: list[RewriteRule] = []
-
-    # --- commutativity ---
-    # Add(x, y) = Add(y, x)
-    rules.append(RewriteRule(
-        name="add_comm",
-        source=PatternNode("Add", (x, y)),
-        target=PatternNode("Add", (y, x)),
-    ))
-
-    # Mul(x, y) = Mul(y, x)
-    rules.append(RewriteRule(
-        name="mul_comm",
-        source=PatternNode("Mul", (x, y)),
-        target=PatternNode("Mul", (y, x)),
-    ))
-
-    # --- associativity ---
-    rules.append(RewriteRule(
-        name="add_assoc_right",
-        source=PatternNode("Add", (PatternNode("Add", (x, y)), PatternVar("?z"))),
-        target=PatternNode("Add", (x, PatternNode("Add", (y, PatternVar("?z"))))),
-    ))
-
-    rules.append(RewriteRule(
-        name="mul_assoc_right",
-        source=PatternNode("Mul", (PatternNode("Mul", (x, y)), PatternVar("?z"))),
-        target=PatternNode("Mul", (x, PatternNode("Mul", (y, PatternVar("?z"))))),
-    ))
-
-    return rules
+    return rulespecs_to_rewrites(get_arithmetic_specs())

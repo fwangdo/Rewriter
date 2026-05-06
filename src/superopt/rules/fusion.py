@@ -9,8 +9,10 @@ Reference: Tensat Figure 8, 9, 10, 11.
 
 from __future__ import annotations
 
+from src.common.rules import get_fusion_specs
+
 from .base import RewriteRule
-from ..egraph.pattern import PatternNode, PatternVar
+from .wrapper import rulespecs_to_rewrites
 
 
 def get_fusion_rules() -> list[RewriteRule]:
@@ -20,16 +22,4 @@ def get_fusion_rules() -> list[RewriteRule]:
     special handling in the exploration phase.  The rules below
     are single-pattern approximations.
     """
-    x = PatternVar("?x")
-
-    rules: list[RewriteRule] = []
-
-    # Conservative skeleton rules only. Real multi-root fusion should be
-    # introduced after extractor and constant synthesis are stable.
-    rules.append(RewriteRule(
-        name="bias_add_commute",
-        source=PatternNode("Add", (PatternNode("MatMul", (x, PatternVar("?w"))), PatternVar("?b"))),
-        target=PatternNode("Add", (PatternVar("?b"), PatternNode("MatMul", (x, PatternVar("?w"))))),
-    ))
-
-    return rules
+    return rulespecs_to_rewrites(get_fusion_specs())
