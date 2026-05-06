@@ -27,14 +27,6 @@ def get_legalization_rules() -> list[RewriteRule]:
     a = PatternVar("?a")
     b = PatternVar("?b")
     e = PatternVar("?e")
-    scale = PatternVar("?scale")
-    bias = PatternVar("?bias")
-    cond = PatternVar("?cond")
-    true_val = PatternVar("?true")
-    false_val = PatternVar("?false")
-    start = PatternVar("?start")
-    limit = PatternVar("?limit")
-    step = PatternVar("?step")
     s = PatternVar("?s")
     bn_b = PatternVar("?bn_b")
     bn_m = PatternVar("?bn_m")
@@ -42,34 +34,6 @@ def get_legalization_rules() -> list[RewriteRule]:
     w = PatternVar("?w")
 
     rules: list[RewriteRule] = rulespecs_to_rewrites(get_legalization_specs())
-
-    # --- F4: LayerNorm decomposition ---
-    rules.append(RewriteRule(
-        name="layernorm_decompose",
-        source=PatternNode("LayerNormalization", (x, scale, bias)),
-        target=PatternNode("LayerNormalization", (x, scale, bias)),  # placeholder
-        apply_fn=_apply_layernorm_decompose,
-    ))
-
-    # --- F6: WhereMask decomposition ---
-    # Where(cond, 0, -inf) → Mul(Sub(1, Cast(cond)), -inf)
-    rules.append(RewriteRule(
-        name="where_mask_decompose",
-        source=PatternNode("Where", (cond, true_val, false_val)),
-        target=PatternNode("Where", (cond, true_val, false_val)),  # placeholder
-        check=_check_where_mask,
-        apply_fn=_apply_where_mask_decompose,
-    ))
-
-    # --- F7: Range decomposition ---
-    # Range(0, limit, 1) → Slice(arange_table, 0, limit)
-    rules.append(RewriteRule(
-        name="range_decompose",
-        source=PatternNode("Range", (start, limit, step)),
-        target=PatternNode("Range", (start, limit, step)),  # placeholder
-        check=_check_range,
-        apply_fn=_apply_range_decompose,
-    ))
 
     # --- F8: BN standalone decomposition ---
     rules.append(RewriteRule(
@@ -102,15 +66,6 @@ def get_legalization_rules() -> list[RewriteRule]:
         apply_fn=_apply_matmul_to_conv,
     ))
 
-    # --- F11: Erf → Tanh approximation ---
-    # Erf(x) ≈ Tanh(x * 0.7978845608 * (1 + 0.044715 * x²))
-    rules.append(RewriteRule(
-        name="erf_to_tanh",
-        source=PatternNode("Erf", (x,)),
-        target=PatternNode("Erf", (x,)),  # placeholder
-        apply_fn=_apply_erf_to_tanh,
-    ))
-
     return rules
 
 
@@ -118,29 +73,6 @@ def get_legalization_rules() -> list[RewriteRule]:
 
 import numpy as np
 from ..egraph.eclass import AnalysisData
-
-
-def _add_scalar_constant(
-    egraph: EGraph,
-    value: float,
-    name: str | None = None,
-    dtype: int = 1,
-) -> EClassId:
-    """Add a scalar constant enode to the egraph, return its eclass id."""
-    arr = np.array(value, dtype=np.float32)
-    hashable = (str(arr.dtype), arr.shape, arr.tobytes())
-    enode = ENode("weight", (), attrs=(
-        ("__name__", name or f"__const_{value}"),
-        ("__synth__", hashable),
-    ))
-    cid = egraph.add(enode)
-    egraph.update_analysis(cid, AnalysisData(
-        shape=tuple(arr.shape),
-        dtype=dtype,
-        is_constant=True,
-        scalar_value=value,
-    ))
-    return cid
 
 
 def _add_ndarray_constant(egraph: EGraph, arr: np.ndarray, name: str, dtype: int = 1) -> EClassId:
@@ -164,121 +96,6 @@ def _add_ndarray_constant(egraph: EGraph, arr: np.ndarray, name: str, dtype: int
 
 def _is_close(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-6
-
-
-# --- F4: LayerNorm decomposition ---
-
-def _apply_layernorm_decompose(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """LayerNormalization(x, scale, bias) → ReduceMean+Sub+Mul+ReduceMean+Add+Sqrt+Div+Mul+Add.
-
-    Reads axis/epsilon from the matched enode's attrs.
-    """
-    x_cid = subst["?x"]
-    scale_cid = subst["?scale"]
-    bias_cid = subst["?bias"]
-
-    # Get axis and epsilon from the matched LayerNorm enode attrs
-    axis = -1
-    epsilon = 1e-5
-    ec = egraph.eclass(match_cid)
-    for nid in ec.nodes:
-        enode = egraph.enode(nid)
-        if enode.op == "LayerNormalization":
-            for k, v in enode.attrs:
-                if k == "axis":
-                    axis = int(v)
-                elif k == "epsilon":
-                    epsilon = float(v)
-            break
-
-    # Create constants
-    axes_arr = np.array([axis], dtype=np.int64)
-    axes_cid = _add_ndarray_constant(egraph, axes_arr, f"__ln_axes_{axis}", dtype=7)
-    eps_cid = _add_scalar_constant(egraph, epsilon)
-
-    # mean = ReduceMean(x, axes)
-    mean_cid = egraph.add(ENode("ReduceMean", (x_cid, axes_cid), attrs=(("keepdims", 1),)))
-    # centered = Sub(x, mean)
-    centered_cid = egraph.add(ENode("Sub", (x_cid, mean_cid)))
-    # squared = Mul(centered, centered)
-    squared_cid = egraph.add(ENode("Mul", (centered_cid, centered_cid)))
-    # var = ReduceMean(squared, axes)
-    var_cid = egraph.add(ENode("ReduceMean", (squared_cid, axes_cid), attrs=(("keepdims", 1),)))
-    # var_eps = Add(var, epsilon)
-    var_eps_cid = egraph.add(ENode("Add", (var_cid, eps_cid)))
-    # std = Sqrt(var_eps)
-    std_cid = egraph.add(ENode("Sqrt", (var_eps_cid,)))
-    # normalized = Div(centered, std)
-    normalized_cid = egraph.add(ENode("Div", (centered_cid, std_cid)))
-    # scaled = Mul(normalized, scale)
-    scaled_cid = egraph.add(ENode("Mul", (normalized_cid, scale_cid)))
-    # output = Add(scaled, bias)
-    output_cid = egraph.add(ENode("Add", (scaled_cid, bias_cid)))
-    return output_cid
-
-
-# --- F6: WhereMask decomposition ---
-
-def _check_where_mask(egraph: EGraph, subst: Subst) -> bool:
-    """Check Where(cond, 0, -inf) pattern."""
-    true_cid = subst["?true"]
-    false_cid = subst["?false"]
-    true_sv = egraph.eclass(true_cid).data.scalar_value
-    false_sv = egraph.eclass(false_cid).data.scalar_value
-    if true_sv is None or false_sv is None:
-        return False
-    return abs(true_sv) < 1e-8 and false_sv <= -1.0e30
-
-
-def _apply_where_mask_decompose(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Where(cond, 0, -inf) → Mul(Sub(1, Cast(cond)), -inf)."""
-    cond_cid = subst["?cond"]
-    false_cid = subst["?false"]  # the -inf value
-
-    # Cast(cond, to=FLOAT)
-    cast_cid = egraph.add(ENode("Cast", (cond_cid,), attrs=(("to", 1),)))
-    # Sub(1, cast)
-    one_cid = _add_scalar_constant(egraph, 1.0)
-    inverse_cid = egraph.add(ENode("Sub", (one_cid, cast_cid)))
-    # Mul(inverse, -inf)
-    return egraph.add(ENode("Mul", (inverse_cid, false_cid)))
-
-
-# --- F7: Range decomposition ---
-
-def _check_range(egraph: EGraph, subst: Subst) -> bool:
-    """Check Range(0, limit, 1)."""
-    start_sv = egraph.eclass(subst["?start"]).data.scalar_value
-    step_sv = egraph.eclass(subst["?step"]).data.scalar_value
-    if start_sv is None or step_sv is None:
-        return False
-    return _is_close(start_sv, 0.0) and _is_close(step_sv, 1.0)
-
-
-def _apply_range_decompose(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Range(0, limit, 1) → Slice(arange_table, 0, Reshape(limit,[1]), [0], [1])."""
-    limit_cid = subst["?limit"]
-
-    MAX_TABLE = 4096
-    table_arr = np.arange(MAX_TABLE, dtype=np.int64)
-    table_cid = _add_ndarray_constant(egraph, table_arr, "__arange_table_4096", dtype=7)
-
-    starts_cid = _add_ndarray_constant(egraph, np.array([0], dtype=np.int64), "__slice_starts_0", dtype=7)
-    axes_cid = _add_ndarray_constant(egraph, np.array([0], dtype=np.int64), "__slice_axes_0", dtype=7)
-    steps_cid = _add_ndarray_constant(egraph, np.array([1], dtype=np.int64), "__slice_steps_1", dtype=7)
-
-    # Reshape limit to [1] for Slice ends input
-    ends_shape_cid = _add_ndarray_constant(egraph, np.array([1], dtype=np.int64), "__shape_1", dtype=7)
-    ends_cid = egraph.add(ENode("Reshape", (limit_cid, ends_shape_cid)))
-
-    # Slice(table, starts, ends, axes, steps)
-    return egraph.add(ENode("Slice", (table_cid, starts_cid, ends_cid, axes_cid, steps_cid)))
 
 
 # --- F8: BN standalone decomposition ---
@@ -495,33 +312,6 @@ def _apply_matmul_to_conv(
         rs2_shape = np.array([-1, N], dtype=np.int64)
         rs2_cid = _add_ndarray_constant(egraph, rs2_shape, f"__reshape_n1_{N}", dtype=7)
         return egraph.add(ENode("Reshape", (t2_cid, rs2_cid)))
-
-
-# --- F11: Erf → Tanh approximation ---
-
-def _apply_erf_to_tanh(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Erf(x) ≈ Tanh(x * 0.7978845608 * (1 + 0.044715 * x²))"""
-    x_cid = subst["?x"]
-
-    # Constants
-    c1_cid = _add_scalar_constant(egraph, 0.044715, "__erf_c1")
-    c2_cid = _add_scalar_constant(egraph, 0.7978845608, "__erf_c2")
-    one_cid = _add_scalar_constant(egraph, 1.0, "__erf_one")
-
-    # x² = Mul(x, x)
-    x2_cid = egraph.add(ENode("Mul", (x_cid, x_cid)))
-    # 0.044715 * x²
-    cx2_cid = egraph.add(ENode("Mul", (c1_cid, x2_cid)))
-    # 1 + 0.044715 * x²
-    inner_cid = egraph.add(ENode("Add", (one_cid, cx2_cid)))
-    # x * 0.7978845608
-    xc_cid = egraph.add(ENode("Mul", (x_cid, c2_cid)))
-    # x * 0.7978845608 * (1 + 0.044715 * x²)
-    arg_cid = egraph.add(ENode("Mul", (xc_cid, inner_cid)))
-    # Tanh(...)
-    return egraph.add(ENode("Tanh", (arg_cid,)))
 
 
 # --- Utility: extract initializer data from an eclass ---

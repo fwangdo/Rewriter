@@ -59,6 +59,12 @@ def _build_check(checks: tuple[VarCheck, ...]):
                     return False
                 if abs(data.scalar_value - check.scalar_close) > 1e-6:
                     return False
+            if check.scalar_abs_lt is not None:
+                if data.scalar_value is None or abs(data.scalar_value) >= check.scalar_abs_lt:
+                    return False
+            if check.scalar_lte is not None:
+                if data.scalar_value is None or data.scalar_value > check.scalar_lte:
+                    return False
             if check.is_constant is not None and data.is_constant != check.is_constant:
                 return False
             if check.has_shape is not None and (data.shape is not None) != check.has_shape:
@@ -164,6 +170,9 @@ class EGraphBuilder:
                 if attr_key == key:
                     return attr_value
         return None
+
+    def get_match(self) -> EClassId:
+        return self.match_cid
 
 
 def _as_cid(value: Any) -> EClassId:

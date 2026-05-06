@@ -24,6 +24,8 @@ class VarCheck:
 
     var: str
     scalar_close: float | None = None
+    scalar_abs_lt: float | None = None
+    scalar_lte: float | None = None
     is_constant: bool | None = None
     has_shape: bool | None = None
 
@@ -54,6 +56,8 @@ class GraphBuilder(Protocol):
     def get_matched_shape(self) -> tuple[int, ...] | None: ...
 
     def get_matched_attr(self, key: str) -> Any: ...
+
+    def get_match(self) -> Any: ...
 
 
 BuildFn = Callable[[GraphBuilder, dict[str, Any]], Any]
