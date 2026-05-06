@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from scipy.optimize import LinearConstraint, milp
+from scipy.optimize import Bounds, LinearConstraint, milp
 from scipy.sparse import csc_array
 
 from ..egraph.egraph import EGraph
@@ -168,7 +168,6 @@ def extract_ilp(
     if n_ub > 0:
         constraints.append(LinearConstraint(A_ub, -np.inf, b_ub))
 
-    from scipy.optimize import Bounds
     bounds = Bounds(lb=lb, ub=ub)
 
     result = milp(

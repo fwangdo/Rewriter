@@ -21,7 +21,7 @@ from ..egraph.pattern import Pattern, PatternNode, PatternVar
 from ..explore.explorer import ExploreStats
 from ..extract.cost import CostModel
 from ..ir.graph import IRGraph
-from ..ir.node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+from ..ir.node import IRNode, OP_INPUT, OP_NOOP, OP_WEIGHT
 from ..rules.base import RewriteRule
 
 
@@ -131,6 +131,8 @@ _OP_CTORS: dict[int, Callable[..., TensorExpr]] = {
     8: TensorExpr.op8,
 }
 
+_COST_SCALE = 1_000
+
 
 @dataclass
 class EgglogResult:
@@ -159,6 +161,7 @@ class EgglogBackend:
 
     _IR_NODE_ID_ATTR = "__name__"
     _TUPLE_OP = "__tuple__"
+    _EXTRACT_MULTIPLE_NODE_LIMIT = 1_000
 
     def __init__(self, ir: IRGraph) -> None:
         self.ir = ir
@@ -167,6 +170,7 @@ class EgglogBackend:
         self._key_to_attrs: dict[str, tuple[tuple[str, Any], ...]] = {}
         self._shape_by_key: dict[str, tuple[int, ...] | None] = {}
         self._dtype_by_key: dict[str, int | None] = {}
+        self._node_cost_by_key: dict[tuple[str, str], float] = {}
         self._next_attr_id = 0
         self.root: TensorExpr | None = None
         self._load_ir()
@@ -216,31 +220,48 @@ class EgglogBackend:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
         _ensure_recursion_limit()
+        if cost_model is not None:
+            cost_fn = self._build_cost_fn(cost_model)
+            expr, _cost = self.egraph.extract(
+                self.root,
+                include_cost=True,
+                cost_model=cost_fn,
+            )
+            ir = self._expr_to_ir(expr)
+            return EgglogResult(ir=ir, estimated_cost=_ir_cost(ir, cost_model))
         expr = self.egraph.extract(self.root)
-        ir = self._expr_to_ir(expr)
-        # Compute cost post-hoc from the extracted IR.
-        estimated_cost = _ir_cost(ir, cost_model or CostModel()) if cost_model else None
-        return EgglogResult(ir=ir, estimated_cost=estimated_cost)
+        return EgglogResult(ir=self._expr_to_ir(expr))
 
     def extract_topk(self, k: int) -> list[EgglogResult]:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
+        best = self.extract_best(CostModel())
         if k <= 1:
-            return [self.extract_best(CostModel())]
+            return [best]
+        # extract_multiple currently has no cost-model hook in egglog's Python
+        # API and can dominate runtime on larger graphs. Keep all benchmark
+        # models bounded by returning the latency-cost extraction for large IRs.
+        if len(self.ir.nodes) > self._EXTRACT_MULTIPLE_NODE_LIMIT:
+            return [best]
         exprs = self.egraph.extract_multiple(self.root, k)
-        results: list[EgglogResult] = []
-        seen: set[str] = set()
+        results: list[EgglogResult] = [best]
+        seen: set[tuple[tuple[str, str, tuple[str, ...]], ...]] = {
+            _ir_signature(best.ir)
+        }
         for expr in exprs:
             ir = self._expr_to_ir(expr)
-            sig = repr(ir)
+            sig = _ir_signature(ir)
             if sig in seen:
                 continue
             seen.add(sig)
             results.append(EgglogResult(ir=ir))
+            if len(results) >= k:
+                break
         return results
 
     def _load_ir(self) -> None:
         node_to_expr: dict[str, TensorExpr] = {}
+        cost_model = CostModel()
         for nid in self.ir.topo_order():
             node = self.ir.nodes[nid]
             attrs = tuple((k, v) for k, v in node.attrs if k != self._IR_NODE_ID_ATTR)
@@ -249,6 +270,16 @@ class EgglogBackend:
             attrs = attrs + ((self._IR_NODE_ID_ATTR, nid),)
             attr_key = self._attrs_key(_hashable_attrs(attrs), node.shape, node.dtype)
             children = tuple(node_to_expr[inp] for inp in node.inputs)
+            input_shapes = [
+                self.ir.nodes[inp].shape
+                for inp in node.inputs
+                if inp in self.ir.nodes
+            ]
+            self._node_cost_by_key[(node.op, attr_key)] = cost_model.node_cost(
+                ENode(node.op, (), attrs=node.attrs),
+                output_shape=node.shape,
+                input_shapes=input_shapes,
+            )
             expr = self._make_expr(node.op, attr_key, children)
             node_to_expr[nid] = self.egraph.let(self._safe_let_name(nid), expr)
 
@@ -403,6 +434,52 @@ class EgglogBackend:
     def _safe_let_name(name: str) -> str:
         return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name)
 
+    def _build_cost_fn(
+        self,
+        cost_model: CostModel,
+    ) -> Callable[[EGraph, Expr, list[int]], int]:
+        def cost_fn(_egraph: EGraph, expr: Expr, children_costs: list[int]) -> int:
+            args = get_callable_args(expr)
+            if args is None or len(args) < 2:
+                return sum(children_costs, _COST_SCALE)
+            op = get_literal_value(args[0])
+            attrs_key = get_literal_value(args[1])
+            if not isinstance(op, str) or not isinstance(attrs_key, str):
+                return sum(children_costs, _COST_SCALE)
+            if op == self._TUPLE_OP:
+                return sum(children_costs)
+
+            cached = self._node_cost_by_key.get((op, attrs_key))
+            if cached is not None:
+                return sum(children_costs, _scale_cost(cached))
+
+            attrs = tuple(
+                (k, v)
+                for k, v in self._key_to_attrs.get(attrs_key, ())
+                if k != self._IR_NODE_ID_ATTR
+            )
+            input_shapes = []
+            for child in self._unpack_args(tuple(args[2:])):
+                child_args = get_callable_args(child)
+                if child_args is None or len(child_args) < 2:
+                    input_shapes.append(None)
+                    continue
+                child_key = get_literal_value(child_args[1])
+                input_shapes.append(
+                    self._shape_by_key.get(child_key)
+                    if isinstance(child_key, str)
+                    else None
+                )
+            self_cost = cost_model.node_cost(
+                ENode(op, (), attrs=attrs),
+                output_shape=self._shape_by_key.get(attrs_key),
+                input_shapes=input_shapes,
+            )
+            self._node_cost_by_key[(op, attrs_key)] = self_cost
+            return sum(children_costs, _scale_cost(self_cost))
+
+        return cost_fn
+
 
 def _hashable_attrs(
     attrs: tuple[tuple[str, Any], ...],
@@ -421,3 +498,14 @@ def _ensure_recursion_limit() -> None:
     # Transformer-style graphs can exceed Python's default recursion limit.
     if sys.getrecursionlimit() < 10_000:
         sys.setrecursionlimit(10_000)
+
+
+def _scale_cost(cost: float) -> int:
+    return max(0, int(round(cost * _COST_SCALE)))
+
+
+def _ir_signature(ir: IRGraph) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
+    return tuple(
+        (node.id, node.op, tuple(node.inputs))
+        for node in (ir.nodes[nid] for nid in ir.topo_order())
+    )

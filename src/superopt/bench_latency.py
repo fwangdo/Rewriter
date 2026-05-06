@@ -7,12 +7,18 @@ Correctness = np.allclose(orig_output, opt_output, atol, rtol=1e-4).
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 
-import numpy as np
-import onnx
 import onnxruntime as ort
+
+from src.superopt.validation import (
+    TOLERANCES,
+    compare_outputs as check_correctness,
+    make_inputs,
+    make_session,
+    measure_latency,
+    run_inference,
+)
 
 # (domain, name, max_iter, max_nodes)
 MODELS = [
@@ -24,116 +30,7 @@ MODELS = [
     ("vision", "yolo26_nano", 10, 20_000),
 ]
 
-# Tolerances per domain (from Gawee).
-TOLERANCES = {
-    "nlp": {"atol": 5e-4, "rtol": 1e-4},
-    "vision": {"atol": 1e-4, "rtol": 1e-4},
-}
-
 ROOT = Path(__file__).resolve().parent.parent.parent
-
-
-def make_session(model_path: str) -> ort.InferenceSession:
-    """Create an ORT session with single-thread, all optimizations."""
-    opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 1
-    opts.inter_op_num_threads = 1
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    return ort.InferenceSession(model_path, opts, providers=["CPUExecutionProvider"])
-
-
-def make_inputs(sess: ort.InferenceSession, seed: int = 42) -> dict[str, np.ndarray]:
-    """Create reproducible dummy inputs matching session's input specs."""
-    rng = np.random.default_rng(seed)
-    SEQ_LEN = 128
-    PAST_LEN = 0
-
-    inputs = {}
-    for inp in sess.get_inputs():
-        shape = []
-        for d in inp.shape:
-            if isinstance(d, str) or d is None:
-                if d and "past_sequence_length" in str(d):
-                    shape.append(PAST_LEN)
-                elif d and "sequence_length" in str(d):
-                    shape.append(SEQ_LEN)
-                elif d and "batch" in str(d):
-                    shape.append(1)
-                else:
-                    shape.append(1)
-            else:
-                shape.append(d)
-
-        if "input_ids" in inp.name:
-            shape = [1, SEQ_LEN]
-        elif "attention_mask" in inp.name:
-            shape = [1, PAST_LEN + SEQ_LEN]
-        elif "position_ids" in inp.name:
-            shape = [1, SEQ_LEN]
-
-        # Determine dtype
-        is_int = "int" in inp.type.lower() or any(
-            k in inp.name for k in ("input_ids", "attention_mask", "position_ids")
-        )
-        is_bool = "bool" in inp.type.lower()
-
-        if is_int:
-            if "position_ids" in inp.name:
-                # Position IDs must be sequential (for RoPE)
-                inputs[inp.name] = np.arange(shape[-1], dtype=np.int64).reshape(shape)
-            elif "attention_mask" in inp.name:
-                inputs[inp.name] = np.ones(shape, dtype=np.int64)
-            elif "input_ids" in inp.name:
-                inputs[inp.name] = rng.integers(0, 100, size=shape, dtype=np.int64)
-            else:
-                inputs[inp.name] = rng.integers(0, 100, size=shape, dtype=np.int64)
-        elif is_bool:
-            inputs[inp.name] = rng.integers(0, 2, size=shape).astype(np.bool_)
-        else:
-            inputs[inp.name] = rng.standard_normal(shape).astype(np.float32)
-    return inputs
-
-
-def run_inference(sess: ort.InferenceSession, inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
-    """Run inference, return list of output arrays."""
-    return sess.run(None, inputs)
-
-
-def check_correctness(
-    orig_outputs: list[np.ndarray],
-    opt_outputs: list[np.ndarray],
-    atol: float,
-    rtol: float = 1e-4,
-) -> dict:
-    """Compare outputs. Returns correctness info."""
-    if len(orig_outputs) != len(opt_outputs):
-        return {"ok": False, "reason": f"output count mismatch: {len(orig_outputs)} vs {len(opt_outputs)}"}
-
-    max_abs_diff = 0.0
-    for i, (orig, opt) in enumerate(zip(orig_outputs, opt_outputs)):
-        if orig.shape != opt.shape:
-            return {"ok": False, "reason": f"output[{i}] shape mismatch: {orig.shape} vs {opt.shape}"}
-        diff = float(np.max(np.abs(orig.astype(np.float64) - opt.astype(np.float64))))
-        max_abs_diff = max(max_abs_diff, diff)
-
-    ok = all(
-        np.allclose(orig, opt, atol=atol, rtol=rtol)
-        for orig, opt in zip(orig_outputs, opt_outputs)
-    )
-    return {"ok": ok, "max_abs_diff": max_abs_diff, "atol": atol, "rtol": rtol}
-
-
-def measure_latency(sess: ort.InferenceSession, inputs: dict[str, np.ndarray],
-                    warmup: int = 5, runs: int = 20) -> float:
-    """Return median latency in ms."""
-    for _ in range(warmup):
-        sess.run(None, inputs)
-    times = []
-    for _ in range(runs):
-        t0 = time.perf_counter()
-        sess.run(None, inputs)
-        times.append((time.perf_counter() - t0) * 1000)
-    return float(np.median(times))
 
 
 def run_onnx_optimizer(input_path: str, output_path: str) -> bool:

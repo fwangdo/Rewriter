@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from ..egraph.enode import EClassId
+from ..egraph.enode import EClassId, ENode
 from ..egraph.egraph import EGraph
 from ..egraph.pattern import Pattern, PatternNode, PatternVar, Subst
 
@@ -85,8 +85,6 @@ def _instantiate(
     children = tuple(
         _instantiate(egraph, child, subst) for child in pattern.children
     )
-    from ..egraph.enode import ENode
-
     enode = ENode(
         op=pattern.op,
         children=children,

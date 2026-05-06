@@ -1,4 +1,4 @@
-from common.contracts import (
+from src.common.contracts import (
     BENCHMARK_ONNX_MIN_OPSET,
     BENCHMARK_ONNX_OPSET,
     LLM_META_OPS,

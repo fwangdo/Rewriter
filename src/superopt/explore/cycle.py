@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from ..egraph.enode import EClassId
 from ..egraph.egraph import EGraph
-from ..egraph.pattern import Subst
+from ..egraph.pattern import PatternNode, PatternVar, Subst
 from ..rules.base import RewriteRule
 
 DescendantMap = dict[EClassId, set[EClassId]]
@@ -180,8 +180,6 @@ def _collect_var_refs(
     pattern, subst: Subst
 ) -> set[EClassId]:
     """Collect all e-class ids referenced by variables in a pattern."""
-    from ..egraph.pattern import PatternVar, PatternNode
-
     refs: set[EClassId] = set()
     if isinstance(pattern, PatternVar):
         if pattern.name in subst:

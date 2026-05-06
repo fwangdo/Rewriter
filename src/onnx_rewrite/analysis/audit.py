@@ -7,7 +7,7 @@ from typing import Iterable
 
 import onnx
 
-from common.contracts import SUPPORTED_OPS
+from src.common.contracts import SUPPORTED_OPS
 
 
 @dataclass(frozen=True)

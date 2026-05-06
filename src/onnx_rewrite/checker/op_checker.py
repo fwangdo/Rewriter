@@ -5,7 +5,7 @@ from typing import Any, Iterable
 
 import onnx
 
-from common.contracts import SUPPORTED_OPS
+from src.common.contracts import SUPPORTED_OPS
 
 
 class OpChecker:

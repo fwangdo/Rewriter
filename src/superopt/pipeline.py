@@ -13,11 +13,12 @@ import numpy as np
 import onnx
 
 from .backends.egglog import EgglogBackend
+from .compat import run_post_passes, run_pre_passes
+from .contracts import Contract, check_contract
 from .egraph.eclass import AnalysisData
 from .egraph.egraph import EGraph
 from .egraph.enode import EClassId, ENode
-from .explore.explorer import explore
-from .explore.explorer import ExploreStats
+from .explore.explorer import explore, ExploreStats
 from .extract.cost import CostModel
 from .extract.greedy import extract_greedy
 from .ir.convert import ir_to_onnx, onnx_to_ir
@@ -58,6 +59,7 @@ class SuperoptResult:
     optimized_nodes: int = 0
     explore_stats: ExploreStats = field(default_factory=ExploreStats)
     estimated_cost: float | None = None
+    contract_result: dict[str, object] | None = None
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
@@ -140,8 +142,6 @@ def _make_output_model(
 ) -> onnx.ModelProto:
     _attach_initializers(opt_ir, source_ir)
     opt_model = ir_to_onnx(opt_ir, ref_model)
-    from .compat import run_post_passes
-
     return run_post_passes(opt_model)
 
 
@@ -151,8 +151,6 @@ def _count_compute_nodes(ir: IRGraph) -> int:
 
 def _load_preprocessed_ir(input_path: str) -> tuple[onnx.ModelProto, IRGraph]:
     model = onnx.load(input_path)
-    from .compat import run_pre_passes
-
     model = run_pre_passes(model)
     return model, onnx_to_ir(model)
 
@@ -232,12 +230,16 @@ def superoptimize(
 ) -> SuperoptResult:
     """Run the full superoptimization pipeline on an ONNX model.
 
-    All ONNX ops are extractable. The extraction objective is the
-    profiled ONNX Runtime latency cost model.
+    ONNX ops remain extractable, but a supported-op contract can be attached
+    as a post-materialization legality gate.
     """
-    del supported_ops
     input_path = str(input_path)
     output_path = str(output_path)
+    contract = (
+        Contract(name="custom", supported_ops=frozenset(supported_ops))
+        if supported_ops is not None
+        else None
+    )
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
@@ -249,6 +251,7 @@ def superoptimize(
     opt_ir = extracted.ir
 
     opt_model = _make_output_model(opt_ir, ir, model)
+    contract_result = check_contract(opt_model, contract) if contract else None
     onnx.save(opt_model, output_path)
 
     return SuperoptResult(
@@ -258,6 +261,7 @@ def superoptimize(
         optimized_nodes=_count_compute_nodes(opt_ir),
         explore_stats=bridge_stats,
         estimated_cost=extracted.estimated_cost,
+        contract_result=contract_result,
     )
 
 
@@ -270,10 +274,14 @@ def superoptimize_topk(
     k: int = 5,
 ) -> list[SuperoptResult]:
     """Materialize the top-k estimated-cost extraction candidates."""
-    del supported_ops
     input_path = str(input_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    contract = (
+        Contract(name="custom", supported_ops=frozenset(supported_ops))
+        if supported_ops is not None
+        else None
+    )
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
@@ -287,6 +295,7 @@ def superoptimize_topk(
     for index, program in enumerate(programs):
         opt_ir = program.ir
         opt_model = _make_output_model(opt_ir, ir, model)
+        contract_result = check_contract(opt_model, contract) if contract else None
         output_path = output_dir / f"candidate_{index}.onnx"
         onnx.save(opt_model, output_path)
         results.append(
@@ -297,6 +306,7 @@ def superoptimize_topk(
                 optimized_nodes=_count_compute_nodes(opt_ir),
                 explore_stats=bridge_stats,
                 estimated_cost=program.estimated_cost,
+                contract_result=contract_result,
             )
         )
     return results
