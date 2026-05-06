@@ -7,6 +7,7 @@ congruence closure, rule application, and extraction to egglog.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -220,6 +221,7 @@ class EgglogBackend:
     def extract_best(self, cost_model: CostModel) -> EgglogResult:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
+        _ensure_recursion_limit()
         expr, cost = self.egraph.extract(
             self.root,
             include_cost=True,
@@ -427,3 +429,10 @@ def _hashable_attrs(
 def _cost_to_float(cost: Any) -> float:
     total = getattr(cost, "total", cost)
     return float(total)
+
+
+def _ensure_recursion_limit() -> None:
+    # egglog's Python binding reconstructs extracted term DAGs recursively.
+    # Transformer-style graphs can exceed Python's default recursion limit.
+    if sys.getrecursionlimit() < 10_000:
+        sys.setrecursionlimit(10_000)
