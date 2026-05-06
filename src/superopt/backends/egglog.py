@@ -227,12 +227,14 @@ class EgglogBackend:
         )
         return EgglogResult(
             ir=self._expr_to_ir(expr),
-            estimated_cost=float(cost),
+            estimated_cost=_cost_to_float(cost),
         )
 
     def extract_topk(self, k: int) -> list[EgglogResult]:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
+        if k <= 1:
+            return [self.extract_best(CostModel())]
         exprs = self.egraph.extract_multiple(self.root, k)
         results: list[EgglogResult] = []
         seen: set[str] = set()
@@ -341,14 +343,13 @@ class EgglogBackend:
         ir.inputs = self.ir.inputs
         ir.outputs = self.ir.outputs
         ir.initializers = dict(self.ir.initializers)
-        built: dict[str, str] = {}
+        built: dict[TensorExpr, str] = {}
         counter = 0
 
         def visit(cur: TensorExpr) -> str:
             nonlocal counter
-            key = repr(cur)
-            if key in built:
-                return built[key]
+            if cur in built:
+                return built[cur]
 
             args = get_callable_args(cur)
             if args is None or len(args) < 2:
@@ -385,7 +386,7 @@ class EgglogBackend:
                     dtype=self._dtype_by_key.get(attrs_key),
                 )
             )
-            built[key] = node_id
+            built[cur] = node_id
             return node_id
 
         ir.root = visit(expr)
@@ -421,3 +422,8 @@ def _hashable_attrs(
         else:
             result.append((key, value))
     return tuple(result)
+
+
+def _cost_to_float(cost: Any) -> float:
+    total = getattr(cost, "total", cost)
+    return float(total)

@@ -775,6 +775,22 @@ Bridge smoke:
 - ORT correctness: PASS, max_abs_diff=0.0
 - latency: 약 11.41ms
 
+Easy-4 smoke after egglog extraction fix:
+- 공통 설정: `superoptimize_topk(..., max_iter=0, max_nodes=5000, k=1)`
+- `mobilenetv2`: PASS, 100 -> 100 nodes, max_abs_diff=0.0, latency 약 11.22ms
+- `yolo26_nano`: PASS, 397 -> 397 nodes, max_abs_diff=0.0, latency 약 92.72ms
+- `mobilevit_xxs`: PASS, 417 -> 417 nodes, max_abs_diff=0.0, latency 약 12.78ms
+- `tinyllama_15m`: PASS, 765 -> 730 nodes, max_abs_diff=0.0, latency 약 46.59ms
+
+이번에 규명한 병목:
+- `yolo26_nano`/`mobilevit_xxs`가 느렸던 직접 원인은 egglog extraction 자체가
+  아니라 `_expr_to_ir()`에서 memo key로 `repr(expr)`를 사용한 것이다.
+- 큰 expression에서 `repr()`가 subtree 문자열을 반복 생성해 10초 이상 걸렸다.
+- egglog `RuntimeExpr` 자체가 hash 가능하므로 memo key를 expression object로
+  바꾸자 `_expr_to_ir()`가 yolo 기준 약 10초 timeout -> 약 0.017초로 줄었다.
+- 추가로 high-arity root(`noop/13`, `noop/61`)는 internal `__tuple__` term으로
+  packing/unpacking해 egglog arity 제한을 우회한다.
+
 다음 할 일:
 [ ] `RewriteRule`을 egglog-native rule 표현으로 재정리
 [ ] `check` 기반 rule을 egglog analysis/facts 또는 Python pre-filter 방식으로 포팅
@@ -827,11 +843,7 @@ e-class 트리로 복제되어 e-graph가 O(layer 수)로 커지는 문제.
 - 자체 e-graph 구현 성능/정합성 리스크를 줄이기 위해 egglog backend로 전환했다.
 - `mobilenetv2` 100-node 모델은 egglog round-trip과 pure rewrite 1 iteration이
   수 초 내 완료된다.
-- `mobilevit_xxs` 417-node 모델은 현재 generic egglog encoding에서 round-trip
-  extraction도 느리다. 원인은 아직 미확정:
-  - generic `opN(op_string, attrs_string, ...)` encoding 비용
-  - 모든 노드를 `let`으로 등록하는 방식의 overhead
-  - `extract_multiple` 비용
-  - 큰 graph의 attr/name 보존 방식
-- 따라서 다음 성능 작업은 large model 전에 egglog encoding을 더 직접적으로
-  줄이는 것이다.
+- `mobilevit_xxs` 417-node, `yolo26_nano` 397-node 모델은 `_expr_to_ir()`의
+  `repr(expr)` memo key 병목을 제거한 뒤 1초 내 후보 생성이 가능해졌다.
+- 남은 성능 리스크는 larger NLP 모델(`pythia_70m`, `smollm_135m`)에서 별도로
+  확인한다.
