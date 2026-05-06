@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+import numpy as np
 from egglog import EGraph, Expr, String, StringLike, greedy_dag_cost_model
 from egglog import rewrite, var
 from egglog.deconstruct import get_callable_args, get_literal_value
@@ -162,6 +163,7 @@ class EgglogBackend:
     """IRGraph <-> egglog adapter."""
 
     _IR_NODE_ID_ATTR = "__name__"
+    _TUPLE_OP = "__tuple__"
 
     def __init__(self, ir: IRGraph) -> None:
         self.ir = ir
@@ -251,7 +253,7 @@ class EgglogBackend:
             # Preserve the original IR node id so extracted graphs can keep
             # ONNX output names and initializer names stable.
             attrs = attrs + ((self._IR_NODE_ID_ATTR, nid),)
-            attr_key = self._attrs_key(attrs, node.shape, node.dtype)
+            attr_key = self._attrs_key(_hashable_attrs(attrs), node.shape, node.dtype)
             children = tuple(node_to_expr[inp] for inp in node.inputs)
             expr = self._make_expr(node.op, attr_key, children)
             node_to_expr[nid] = self.egraph.let(self._safe_let_name(nid), expr)
@@ -287,6 +289,8 @@ class EgglogBackend:
         attrs_key: str,
         children: tuple[TensorExpr, ...],
     ) -> TensorExpr:
+        if len(children) > max(_OP_CTORS):
+            return self._make_expr(op, attrs_key, (self._pack_children(children),))
         try:
             ctor = _OP_CTORS[len(children)]
         except KeyError as exc:
@@ -294,6 +298,20 @@ class EgglogBackend:
                 f"unsupported op arity for egglog backend: {op}/{len(children)}"
             ) from exc
         return ctor(op, attrs_key, *children)
+
+    def _pack_children(self, children: tuple[TensorExpr, ...]) -> TensorExpr:
+        if len(children) == 1:
+            return children[0]
+        mid = len(children) // 2
+        empty_attrs = self._attrs_key(())
+        return self._make_expr(
+            self._TUPLE_OP,
+            empty_attrs,
+            (
+                self._pack_children(children[:mid]),
+                self._pack_children(children[mid:]),
+            ),
+        )
 
     def _pattern_to_expr(
         self,
@@ -341,7 +359,7 @@ class EgglogBackend:
                 raise ValueError(f"cannot decode egglog expression args: {cur!r}")
             attrs = self._key_to_attrs.get(attrs_key, ())
             attrs_dict = dict(attrs)
-            child_ids = tuple(visit(child) for child in args[2:])
+            child_ids = tuple(visit(child) for child in self._unpack_args(args[2:]))
 
             if op in (OP_INPUT, OP_WEIGHT):
                 node_id = attrs_dict.get(self._IR_NODE_ID_ATTR)
@@ -373,6 +391,33 @@ class EgglogBackend:
         ir.root = visit(expr)
         return ir
 
+    def _unpack_args(self, args: tuple[TensorExpr, ...]) -> tuple[TensorExpr, ...]:
+        unpacked: list[TensorExpr] = []
+        for arg in args:
+            unpacked.extend(self._unpack_expr(arg))
+        return tuple(unpacked)
+
+    def _unpack_expr(self, expr: TensorExpr) -> tuple[TensorExpr, ...]:
+        args = get_callable_args(expr)
+        if args is None or len(args) < 2:
+            return (expr,)
+        op = get_literal_value(args[0])
+        if op != self._TUPLE_OP:
+            return (expr,)
+        return self._unpack_args(args[2:])
+
     @staticmethod
     def _safe_let_name(name: str) -> str:
         return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name)
+
+
+def _hashable_attrs(
+    attrs: tuple[tuple[str, Any], ...],
+) -> tuple[tuple[str, Any], ...]:
+    result = []
+    for key, value in attrs:
+        if isinstance(value, np.ndarray):
+            result.append((key, (str(value.dtype), value.shape, value.tobytes())))
+        else:
+            result.append((key, value))
+    return tuple(result)
