@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import numpy as np
-from egglog import EGraph, Expr, String, StringLike, greedy_dag_cost_model
+from egglog import EGraph, Expr, String, StringLike
 from egglog import rewrite, var
 from egglog.deconstruct import get_callable_args, get_literal_value
 
@@ -138,35 +138,20 @@ class EgglogResult:
     estimated_cost: float | None = None
 
 
-class OrtCost:
-    """egglog cost callback backed by FLOPs-based cost model."""
-
-    def __init__(self, cost_model: CostModel, backend: "EgglogBackend") -> None:
-        self.cost_model = cost_model
-        self.backend = backend
-
-    def __call__(
-        self,
-        egraph: EGraph,
-        expr: TensorExpr,
-        children_costs: list[float],
-    ) -> float:
-        del egraph
-        args = get_callable_args(expr)
-        if args is None or len(args) < 2:
-            return sum(children_costs) + 1.0
-        op = get_literal_value(args[0])
-        if not isinstance(op, str):
-            return sum(children_costs) + 1.0
-        attrs_key = get_literal_value(args[1])
-        output_shape = None
-        attrs: tuple[tuple[str, object], ...] = ()
-        if isinstance(attrs_key, str):
-            output_shape = self.backend._shape_by_key.get(attrs_key)
-            attrs = self.backend._key_to_attrs.get(attrs_key, ())
-        return sum(children_costs) + self.cost_model.node_cost(
-            ENode(op, (), attrs=attrs), output_shape=output_shape,
+def _ir_cost(ir: IRGraph, cost_model: CostModel) -> float:
+    """Compute total cost of an extracted IR graph (post-hoc)."""
+    total = 0.0
+    for nid in ir.topo_order():
+        node = ir.nodes[nid]
+        input_shapes = [
+            ir.nodes[inp].shape for inp in node.inputs if inp in ir.nodes
+        ]
+        total += cost_model.node_cost(
+            ENode(node.op, (), attrs=node.attrs),
+            output_shape=node.shape,
+            input_shapes=input_shapes,
         )
+    return total
 
 
 class EgglogBackend:
@@ -227,19 +212,15 @@ class EgglogBackend:
         stats.saturated = skipped == 0
         return stats
 
-    def extract_best(self, cost_model: CostModel) -> EgglogResult:
+    def extract_best(self, cost_model: CostModel | None = None) -> EgglogResult:
         if self.root is None:
             raise ValueError("cannot extract: missing root")
         _ensure_recursion_limit()
-        expr, cost = self.egraph.extract(
-            self.root,
-            include_cost=True,
-            cost_model=greedy_dag_cost_model(OrtCost(cost_model, self)),
-        )
-        return EgglogResult(
-            ir=self._expr_to_ir(expr),
-            estimated_cost=_cost_to_float(cost),
-        )
+        expr = self.egraph.extract(self.root)
+        ir = self._expr_to_ir(expr)
+        # Compute cost post-hoc from the extracted IR.
+        estimated_cost = _ir_cost(ir, cost_model or CostModel()) if cost_model else None
+        return EgglogResult(ir=ir, estimated_cost=estimated_cost)
 
     def extract_topk(self, k: int) -> list[EgglogResult]:
         if self.root is None:
@@ -433,11 +414,6 @@ def _hashable_attrs(
         else:
             result.append((key, value))
     return tuple(result)
-
-
-def _cost_to_float(cost: Any) -> float:
-    total = getattr(cost, "total", cost)
-    return float(total)
 
 
 def _ensure_recursion_limit() -> None:
