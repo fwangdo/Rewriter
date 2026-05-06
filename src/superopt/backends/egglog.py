@@ -139,10 +139,11 @@ class EgglogResult:
 
 
 class OrtCost:
-    """egglog cost callback backed by the Superopt ORT op cost table."""
+    """egglog cost callback backed by FLOPs-based cost model."""
 
-    def __init__(self, cost_model: CostModel) -> None:
+    def __init__(self, cost_model: CostModel, backend: "EgglogBackend") -> None:
         self.cost_model = cost_model
+        self.backend = backend
 
     def __call__(
         self,
@@ -157,7 +158,15 @@ class OrtCost:
         op = get_literal_value(args[0])
         if not isinstance(op, str):
             return sum(children_costs) + 1.0
-        return sum(children_costs) + self.cost_model.node_cost(ENode(op, ()))
+        attrs_key = get_literal_value(args[1])
+        output_shape = None
+        attrs: tuple[tuple[str, object], ...] = ()
+        if isinstance(attrs_key, str):
+            output_shape = self.backend._shape_by_key.get(attrs_key)
+            attrs = self.backend._key_to_attrs.get(attrs_key, ())
+        return sum(children_costs) + self.cost_model.node_cost(
+            ENode(op, (), attrs=attrs), output_shape=output_shape,
+        )
 
 
 class EgglogBackend:
@@ -225,7 +234,7 @@ class EgglogBackend:
         expr, cost = self.egraph.extract(
             self.root,
             include_cost=True,
-            cost_model=greedy_dag_cost_model(OrtCost(cost_model)),
+            cost_model=greedy_dag_cost_model(OrtCost(cost_model, self)),
         )
         return EgglogResult(
             ir=self._expr_to_ir(expr),

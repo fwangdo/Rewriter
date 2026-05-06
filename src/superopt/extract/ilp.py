@@ -85,7 +85,14 @@ def extract_ilp(
     c = np.zeros(n_vars)
     for cid in reachable:
         for j, enode in enumerate(eclass_enodes[cid]):
-            c[x_idx[(cid, j)]] = cost_model.node_cost(enode)
+            ec_data = egraph.eclass(cid).data
+            child_shapes = [
+                egraph.eclass(egraph.find(ch)).data.shape
+                for ch in enode.children
+            ]
+            c[x_idx[(cid, j)]] = cost_model.node_cost(
+                enode, output_shape=ec_data.shape, input_shapes=child_shapes,
+            )
 
     # 4. Equality constraints: for each eclass, Σ x_n - t_c = 0.
     eq_rows = []

@@ -123,7 +123,16 @@ def extract_topk(
                         variant[ci] = alt
                         all_combos.append(tuple(variant))
             for combo in all_combos:
-                total = cost_model.node_cost(enode)
+                ec_data = egraph.eclass(cid).data
+                child_shapes = [
+                    egraph.eclass(egraph.find(c)).data.shape
+                    for c in enode.children
+                ]
+                total = cost_model.node_cost(
+                    enode,
+                    output_shape=ec_data.shape,
+                    input_shapes=child_shapes,
+                )
                 choices: dict[EClassId, ENode] = {}
                 conflict = False
                 for child_cost, child_choices in combo:
