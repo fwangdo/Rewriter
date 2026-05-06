@@ -135,6 +135,31 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             build_fn=_build_erf_to_tanh,
             family="legalization",
         ),
+        RuleSpec(
+            name="bn_decompose",
+            source=P("BatchNormalization", ("?x", "?s", "?bn_b", "?bn_m", "?bn_v")),
+            build_fn=_build_bn_decompose,
+            family="legalization",
+        ),
+        RuleSpec(
+            name="gemm_decompose",
+            source=P("Gemm", ("?a", "?w", "?b")),
+            build_fn=_build_gemm_decompose,
+            family="legalization",
+        ),
+        RuleSpec(
+            name="gemm_decompose_no_bias",
+            source=P("Gemm", ("?a", "?w")),
+            build_fn=_build_gemm_decompose_no_bias,
+            family="legalization",
+        ),
+        RuleSpec(
+            name="matmul_to_conv",
+            source=P("MatMul", ("?a", "?w")),
+            checks=(VarCheck("?w", is_constant=True),),
+            build_fn=_build_matmul_to_conv,
+            family="legalization",
+        ),
     ]
 
 
@@ -218,3 +243,119 @@ def _build_erf_to_tanh(builder: GraphBuilder, vars: dict[str, object]) -> object
     xc = builder.add_op("Mul", [vars["?x"], c2])
     arg = builder.add_op("Mul", [xc, inner])
     return builder.add_op("Tanh", [arg])
+
+
+def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    epsilon = builder.get_matched_attr("epsilon")
+    epsilon = 1e-5 if epsilon is None else float(epsilon)
+
+    s_data = builder.get_weight_data("?s")
+    b_data = builder.get_weight_data("?bn_b")
+    m_data = builder.get_weight_data("?bn_m")
+    v_data = builder.get_weight_data("?bn_v")
+    if any(data is None for data in (s_data, b_data, m_data, v_data)):
+        return builder.get_match()
+
+    scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(np.float32)
+    bias_factor = (b_data - m_data * scale_factor).astype(np.float32)
+
+    x_shape = builder.get_shape("?x")
+    if x_shape is not None and len(x_shape) == 4:
+        channels = scale_factor.shape[0]
+        scale_factor = scale_factor.reshape(1, channels, 1, 1)
+        bias_factor = bias_factor.reshape(1, channels, 1, 1)
+
+    sf = builder.add_array(scale_factor, f"__bn_scale_{id(scale_factor)}")
+    bf = builder.add_array(bias_factor, f"__bn_bias_{id(bias_factor)}")
+    mul = builder.add_op("Mul", [vars["?x"], sf])
+    return builder.add_op("Add", [mul, bf])
+
+
+def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    a_value, w_value, b_value = vars["?a"], vars["?w"], vars["?b"]
+    trans_a, trans_b, alpha, beta = _get_gemm_attrs(builder)
+
+    w_data = builder.get_weight_data("?w")
+    if w_data is None:
+        return builder.get_match()
+    if trans_b:
+        w_data = w_data.T
+    w_data = (alpha * w_data).astype(np.float32)
+
+    if trans_a:
+        a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
+
+    w_new = builder.add_array(w_data, f"__gemm_w_{id(w_data)}")
+    matmul = builder.add_op("MatMul", [a_value, w_new])
+
+    b_data = builder.get_weight_data("?b")
+    if b_data is not None and not _is_close(beta, 1.0):
+        b_data = (beta * b_data).astype(np.float32)
+        b_value = builder.add_array(b_data, f"__gemm_bias_{id(b_data)}")
+
+    return builder.add_op("Add", [matmul, b_value])
+
+
+def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    a_value = vars["?a"]
+    trans_a, trans_b, alpha, _beta = _get_gemm_attrs(builder)
+
+    w_data = builder.get_weight_data("?w")
+    if w_data is None:
+        return builder.get_match()
+    if trans_b:
+        w_data = w_data.T
+    w_data = (alpha * w_data).astype(np.float32)
+
+    if trans_a:
+        a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
+
+    w_new = builder.add_array(w_data, f"__gemm_w_{id(w_data)}")
+    return builder.add_op("MatMul", [a_value, w_new])
+
+
+def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    w_data = builder.get_weight_data("?w")
+    if w_data is None or w_data.ndim != 2:
+        return builder.get_match()
+
+    a_shape = builder.get_shape("?a")
+    if a_shape is None or len(a_shape) not in (2, 3):
+        return builder.get_match()
+
+    k_size, n_size = w_data.shape
+    conv_weight = w_data.T.reshape(n_size, k_size, 1, 1).astype(np.float32)
+    conv_w = builder.add_array(conv_weight, f"__matmul_conv_w_{id(conv_weight)}")
+
+    if len(a_shape) == 3:
+        t1 = builder.add_op("Transpose", [vars["?a"]], attrs={"perm": (0, 2, 1)})
+        axes = builder.add_array(np.array([3], dtype=np.int64), "__unsq_axes_3", dtype_code=7)
+        unsqueezed = builder.add_op("Unsqueeze", [t1, axes])
+        conv = builder.add_op("Conv", [unsqueezed, conv_w], attrs={"kernel_shape": (1, 1)})
+        t2 = builder.add_op("Transpose", [conv], attrs={"perm": (0, 2, 1, 3)})
+        reshape_shape = builder.add_array(np.array([0, 0, -1], dtype=np.int64), "__reshape_00n1", dtype_code=7)
+        return builder.add_op("Reshape", [t2, reshape_shape])
+
+    reshape_in_shape = builder.add_array(np.array([1, 0, -1, 1], dtype=np.int64), "__reshape_10n11", dtype_code=7)
+    reshape_in = builder.add_op("Reshape", [vars["?a"], reshape_in_shape])
+    conv = builder.add_op("Conv", [reshape_in, conv_w], attrs={"kernel_shape": (1, 1)})
+    t2 = builder.add_op("Transpose", [conv], attrs={"perm": (0, 2, 1, 3)})
+    reshape_out_shape = builder.add_array(np.array([-1, n_size], dtype=np.int64), f"__reshape_n1_{n_size}", dtype_code=7)
+    return builder.add_op("Reshape", [t2, reshape_out_shape])
+
+
+def _get_gemm_attrs(builder: GraphBuilder) -> tuple[int, int, float, float]:
+    trans_a = builder.get_matched_attr("transA")
+    trans_b = builder.get_matched_attr("transB")
+    alpha = builder.get_matched_attr("alpha")
+    beta = builder.get_matched_attr("beta")
+    return (
+        0 if trans_a is None else int(trans_a),
+        0 if trans_b is None else int(trans_b),
+        1.0 if alpha is None else float(alpha),
+        1.0 if beta is None else float(beta),
+    )
+
+
+def _is_close(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-6
