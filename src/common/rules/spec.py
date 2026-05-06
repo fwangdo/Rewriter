@@ -34,27 +34,29 @@ class GraphBuilder(Protocol):
     def add_op(
         self,
         op: str,
-        inputs: list[str],
+        inputs: list[Any],
         attrs: dict[str, Any] | None = None,
-    ) -> str: ...
+    ) -> Any: ...
 
-    def add_scalar(self, value: float, name: str = "") -> str: ...
+    def add_scalar(self, value: float, name: str = "") -> Any: ...
 
     def add_array(
         self,
         arr: np.ndarray,
         name: str,
         dtype_code: int = 1,
-    ) -> str: ...
+    ) -> Any: ...
 
     def get_weight_data(self, var: str) -> np.ndarray | None: ...
 
     def get_shape(self, var: str) -> tuple[int, ...] | None: ...
 
+    def get_matched_shape(self) -> tuple[int, ...] | None: ...
+
     def get_matched_attr(self, key: str) -> Any: ...
 
 
-BuildFn = Callable[[GraphBuilder, dict[str, str]], str]
+BuildFn = Callable[[GraphBuilder, dict[str, Any]], Any]
 
 
 @dataclass(frozen=True)

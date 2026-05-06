@@ -12,7 +12,7 @@ and legality constraints.
 
 from __future__ import annotations
 
-from src.common.rules import get_pure_legalization_specs
+from src.common.rules import get_legalization_specs
 
 from .base import RewriteRule
 from .wrapper import rulespecs_to_rewrites
@@ -41,78 +41,7 @@ def get_legalization_rules() -> list[RewriteRule]:
     bn_v = PatternVar("?bn_v")
     w = PatternVar("?w")
 
-    rules: list[RewriteRule] = rulespecs_to_rewrites(get_pure_legalization_specs())
-
-    # --- neg_to_mul: Neg(x) → Mul(x, Constant(-1)) ---
-    rules.append(RewriteRule(
-        name="neg_to_mul",
-        source=PatternNode("Neg", (x,)),
-        target=PatternNode("Neg", (x,)),  # placeholder, apply_fn overrides
-        apply_fn=_apply_neg_to_mul,
-    ))
-
-    # --- squeeze_to_reshape: Squeeze(x, axes) → Reshape(x, shape) ---
-    rules.append(RewriteRule(
-        name="squeeze_to_reshape",
-        source=PatternNode("Squeeze", (x, PatternVar("?axes"))),
-        target=PatternNode("Squeeze", (x, PatternVar("?axes"))),  # placeholder
-        check=_check_has_shape,
-        apply_fn=_apply_squeeze_to_reshape,
-    ))
-
-    # --- unsqueeze_to_reshape: Unsqueeze(x, axes) → Reshape(x, shape) ---
-    rules.append(RewriteRule(
-        name="unsqueeze_to_reshape",
-        source=PatternNode("Unsqueeze", (x, PatternVar("?axes"))),
-        target=PatternNode("Unsqueeze", (x, PatternVar("?axes"))),  # placeholder
-        check=_check_has_shape,
-        apply_fn=_apply_unsqueeze_to_reshape,
-    ))
-
-    # --- F3: Pow decomposition (6 variants) ---
-    # Pow(x, e) where e is a scalar constant exponent
-    rules.append(RewriteRule(
-        name="pow_to_identity",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(1.0),
-        apply_fn=_apply_pow_to_identity,
-    ))
-    rules.append(RewriteRule(
-        name="pow_to_sqrt",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(0.5),
-        apply_fn=_apply_pow_to_sqrt,
-    ))
-    rules.append(RewriteRule(
-        name="pow_to_mul",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(2.0),
-        apply_fn=_apply_pow_to_mul,
-    ))
-    rules.append(RewriteRule(
-        name="pow_to_cube",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(3.0),
-        apply_fn=_apply_pow_to_cube,
-    ))
-    rules.append(RewriteRule(
-        name="pow_to_reciprocal",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(-1.0),
-        apply_fn=_apply_pow_to_reciprocal,
-    ))
-    rules.append(RewriteRule(
-        name="pow_to_rsqrt",
-        source=PatternNode("Pow", (x, e)),
-        target=PatternNode("Pow", (x, e)),  # placeholder
-        check=_check_pow_exp(-0.5),
-        apply_fn=_apply_pow_to_rsqrt,
-    ))
+    rules: list[RewriteRule] = rulespecs_to_rewrites(get_legalization_specs())
 
     # --- F4: LayerNorm decomposition ---
     rules.append(RewriteRule(
@@ -191,12 +120,17 @@ import numpy as np
 from ..egraph.eclass import AnalysisData
 
 
-def _add_scalar_constant(egraph: EGraph, value: float, dtype: int = 1) -> EClassId:
+def _add_scalar_constant(
+    egraph: EGraph,
+    value: float,
+    name: str | None = None,
+    dtype: int = 1,
+) -> EClassId:
     """Add a scalar constant enode to the egraph, return its eclass id."""
     arr = np.array(value, dtype=np.float32)
     hashable = (str(arr.dtype), arr.shape, arr.tobytes())
     enode = ENode("weight", (), attrs=(
-        ("__name__", f"__const_{value}"),
+        ("__name__", name or f"__const_{value}"),
         ("__synth__", hashable),
     ))
     cid = egraph.add(enode)
@@ -207,28 +141,6 @@ def _add_scalar_constant(egraph: EGraph, value: float, dtype: int = 1) -> EClass
         scalar_value=value,
     ))
     return cid
-
-
-def _add_shape_constant(egraph: EGraph, shape: tuple[int, ...]) -> EClassId:
-    """Add a shape constant (weight node) to the egraph."""
-    arr = np.array(shape, dtype=np.int64)
-    hashable = (str(arr.dtype), arr.shape, arr.tobytes())
-    enode = ENode("weight", (), attrs=(
-        ("__name__", f"__shape_{shape}"),
-        ("__synth__", hashable),
-    ))
-    cid = egraph.add(enode)
-    egraph.update_analysis(cid, AnalysisData(
-        shape=tuple(arr.shape),
-        dtype=7,  # TensorProto.INT64
-        is_constant=True,
-    ))
-    return cid
-
-
-def _is_valid_reshape_template(shape: tuple[int, ...]) -> bool:
-    """ONNX Reshape permits at most one inferred dimension (-1)."""
-    return sum(1 for dim in shape if dim == -1) <= 1
 
 
 def _add_ndarray_constant(egraph: EGraph, arr: np.ndarray, name: str, dtype: int = 1) -> EClassId:
@@ -250,120 +162,8 @@ def _add_ndarray_constant(egraph: EGraph, arr: np.ndarray, name: str, dtype: int
     return cid
 
 
-# --- Neg ---
-
-def _apply_neg_to_mul(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Neg(x) → Mul(x, -1_constant)."""
-    x_cid = subst["?x"]
-    neg1_cid = _add_scalar_constant(egraph, -1.0)
-    mul_enode = ENode("Mul", (x_cid, neg1_cid))
-    return egraph.add(mul_enode)
-
-
-# --- Squeeze/Unsqueeze ---
-
-def _check_has_shape(egraph: EGraph, subst: Subst) -> bool:
-    """Check that the matched source eclass has known shape."""
-    x_cid = subst["?x"]
-    return egraph.eclass(x_cid).data.shape is not None
-
-
-def _apply_squeeze_to_reshape(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Squeeze(x, axes) → Reshape(x, target_shape)."""
-    x_cid = subst["?x"]
-    target_shape = egraph.eclass(match_cid).data.shape
-    if target_shape is None:
-        return match_cid
-    if not _is_valid_reshape_template(target_shape):
-        return match_cid
-    shape_cid = _add_shape_constant(egraph, target_shape)
-    reshape_enode = ENode("Reshape", (x_cid, shape_cid))
-    return egraph.add(reshape_enode)
-
-
-def _apply_unsqueeze_to_reshape(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Unsqueeze(x, axes) → Reshape(x, target_shape)."""
-    x_cid = subst["?x"]
-    target_shape = egraph.eclass(match_cid).data.shape
-    if target_shape is None:
-        return match_cid
-    if not _is_valid_reshape_template(target_shape):
-        return match_cid
-    shape_cid = _add_shape_constant(egraph, target_shape)
-    reshape_enode = ENode("Reshape", (x_cid, shape_cid))
-    return egraph.add(reshape_enode)
-
-
-# --- F3: Pow decomposition ---
-
 def _is_close(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-6
-
-
-def _check_pow_exp(target_exp: float):
-    """Return a check function for Pow with a specific exponent."""
-    def _check(egraph: EGraph, subst: Subst) -> bool:
-        e_cid = subst["?e"]
-        sv = egraph.eclass(e_cid).data.scalar_value
-        return sv is not None and _is_close(sv, target_exp)
-    return _check
-
-
-def _apply_pow_to_identity(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, 1) → x."""
-    return subst["?x"]
-
-
-def _apply_pow_to_sqrt(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, 0.5) → Sqrt(x)."""
-    x_cid = subst["?x"]
-    return egraph.add(ENode("Sqrt", (x_cid,)))
-
-
-def _apply_pow_to_mul(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, 2) → Mul(x, x)."""
-    x_cid = subst["?x"]
-    return egraph.add(ENode("Mul", (x_cid, x_cid)))
-
-
-def _apply_pow_to_cube(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, 3) → Mul(Mul(x, x), x)."""
-    x_cid = subst["?x"]
-    sq_cid = egraph.add(ENode("Mul", (x_cid, x_cid)))
-    return egraph.add(ENode("Mul", (sq_cid, x_cid)))
-
-
-def _apply_pow_to_reciprocal(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, -1) → Div(1, x)."""
-    x_cid = subst["?x"]
-    one_cid = _add_scalar_constant(egraph, 1.0)
-    return egraph.add(ENode("Div", (one_cid, x_cid)))
-
-
-def _apply_pow_to_rsqrt(
-    egraph: EGraph, match_cid: EClassId, subst: Subst,
-) -> EClassId:
-    """Pow(x, -0.5) → Div(1, Sqrt(x))."""
-    x_cid = subst["?x"]
-    sqrt_cid = egraph.add(ENode("Sqrt", (x_cid,)))
-    one_cid = _add_scalar_constant(egraph, 1.0)
-    return egraph.add(ENode("Div", (one_cid, sqrt_cid)))
 
 
 # --- F4: LayerNorm decomposition ---
