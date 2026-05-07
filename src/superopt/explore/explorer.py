@@ -63,7 +63,7 @@ def explore(
         stats.iterations = iteration + 1
 
         if egraph.num_enodes >= max_nodes:
-            logger.info("exploration stopped: node limit %d reached", max_nodes)
+            logger.info(f"exploration stopped: node limit {max_nodes} reached")
             break
 
         # 1. find all matches

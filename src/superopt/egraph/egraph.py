@@ -40,7 +40,7 @@ class EGraph:
         self._next_class_id: int = 0
         self._next_node_id: int = 0
         # pending merges for rebuild
-        self._pending: list[EClassId] = []
+        self._pending: list[EClassId] = [] # worklist. 
         # initializer data: weight node name → numpy array
         self.initializers: dict[str, object] = {}
 
@@ -52,6 +52,7 @@ class EGraph:
         If an identical e-node already exists, return its e-class.
         Otherwise create a new e-class containing this e-node.
         """
+        # the most important part in e-graph. 
         canon = enode.canonicalize({cid: self.find(cid) for cid in enode.children})
         if canon in self._memo:
             return self.find(self._memo[canon])
@@ -59,9 +60,9 @@ class EGraph:
         # allocate new e-class
         cid = self._next_class_id
         self._next_class_id += 1
-        self._parent[cid] = cid
+        self._parent[cid] = cid 
         ec = EClass(id=cid)
-        self._classes[cid] = ec
+        self._classes[cid] = ec # U. 
 
         # allocate new e-node
         nid = self._next_node_id
@@ -69,7 +70,7 @@ class EGraph:
         self._nodes[nid] = canon
         ec.nodes.add(nid)
         self._memo[canon] = cid
-        self._node_to_class[nid] = cid
+        self._node_to_class[nid] = cid # M 
 
         # Register parent links: this enode is a parent of each child eclass
         for child_cid in canon.children:
@@ -120,6 +121,7 @@ class EGraph:
         while worklist:
             cid = self.find(worklist.popleft())
             self._repair(cid, worklist)
+        return 
 
     def _repair(self, cid: EClassId, worklist: deque) -> None:
         ec = self._classes[cid]
