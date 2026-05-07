@@ -13,12 +13,14 @@ VISION_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Concat",
         "Conv",
         "Div",
+        "GatherElements",
         "GlobalAveragePool",
         "HardSigmoid",
         "HardSwish",
         "MatMul",
         "MaxPool",
         "Mul",
+        "ReduceMax",
         "ReduceMean",
         "Relu",
         "Reshape",
@@ -30,6 +32,8 @@ VISION_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Sqrt",
         "Squeeze",
         "Sub",
+        "Tile",
+        "TopK",
         "Transpose",
     }
 )
@@ -39,19 +43,30 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Add",
         "Cast",
         "Concat",
+        "ConstantOfShape",
+        "Cos",
         "Div",
+        "Equal",
+        "Expand",
         "Gather",
+        "Greater",
+        "Less",
         "MatMul",
         "Mul",
+        "Range",
         "ReduceMean",
         "Reshape",
+        "ScatterND",
+        "Shape",
         "Sigmoid",
+        "Sin",
         "Slice",
         "Softmax",
         "Sqrt",
         "Sub",
         "Tanh",
         "Transpose",
+        "Unsqueeze",
     }
 )
 
@@ -116,11 +131,6 @@ LLM_META_OPS: frozenset[str] = frozenset(
 
 LLM_MUST_REMOVE_OPS: frozenset[str] = frozenset(
     {
-        "Cos",
-        "Expand",
-        "Range",
-        "ScatterND",
-        "Sin",
         "Trilu",
         "Where",
     }
