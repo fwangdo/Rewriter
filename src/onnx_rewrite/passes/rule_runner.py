@@ -192,6 +192,7 @@ def _onnx_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _is_single_node_source(pattern: PatternSpec) -> bool:
+    # ...? 
     return all(isinstance(arg, str) for arg in pattern.args)
 
 
@@ -211,6 +212,7 @@ class OnnxGraphBuilder(GraphBuilder):
         inputs: list[Any],
         attrs: dict[str, Any] | None = None,
     ) -> str:
+        # generate new node and enroll the node in graph builder. 
         output_name = self._tensor_name(op.lower())
         self.nodes.append(
             helper.make_node(

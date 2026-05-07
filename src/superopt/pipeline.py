@@ -1,7 +1,10 @@
 """End-to-end superoptimization pipeline.
 
-ONNX load → shape inference → onnx_to_ir → egglog saturation/extraction
-→ ir_to_onnx → save.
+ONNX load → shape inference → onnx_to_ir → e-graph saturation → egglog
+extraction → ir_to_onnx → save.
+
+All rewrite rules (legalization, arithmetic, layout, fusion) run on the
+hand-rolled e-graph.  egglog is used only for cost-aware extraction.
 """
 
 from __future__ import annotations
@@ -64,11 +67,6 @@ class SuperoptResult:
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
     """Convert an IRGraph into the hand-rolled e-graph.
-
-    The primary saturation/extraction backend is egglog.  This path handles
-    rules with ``check`` or ``apply_fn`` callbacks that require Python-side
-    value inspection or synthetic constant generation — capabilities not yet
-    exposed through egglog's Python API.
 
     Returns the e-graph and the e-class id of the root node.
     """
@@ -166,30 +164,28 @@ def _merge_stats(dst: ExploreStats, src: ExploreStats) -> None:
     dst.saturated = dst.saturated and src.saturated
 
 
-def _run_legacy_callback_bridge(
+def _run_egraph_saturation(
     ir: IRGraph,
     max_iter: int,
     max_nodes: int,
     supported_ops: frozenset[str] | None = None,
 ) -> tuple[IRGraph, ExploreStats]:
-    """Run callback rules through the hand-rolled e-graph before egglog.
+    """Run all rewrite rules through the hand-rolled e-graph.
 
-    egglog handles pure pattern rewrites.  Rules with ``check`` or ``apply_fn``
-    require Python-side value inspection or synthetic constant generation,
-    which egglog's Python API does not support.  This bridge runs those
-    rules iteratively — each pass may expose new match sites for subsequent
-    rules (e.g. Sub→Add+Neg, then Neg→Mul*-1).
+    All rules (legalization, arithmetic, layout, fusion) are unified here.
+    egglog is used only for cost-aware extraction downstream.
     """
     cumulative_stats = ExploreStats()
     if max_iter <= 0:
         return ir, cumulative_stats
 
-    callback_rules = [
-        rule
-        for rule in get_legalization_rules()
-        if rule.check is not None or rule.apply_fn is not None
-    ]
-    if not callback_rules:
+    all_rules = (
+        get_legalization_rules()
+        + get_arithmetic_rules()
+        + get_layout_rules()
+        + get_fusion_rules()
+    )
+    if not all_rules:
         return ir, cumulative_stats
 
     cost_model = CostModel(supported_ops=supported_ops)
@@ -198,7 +194,7 @@ def _run_legacy_callback_bridge(
         egraph, root_cid = ir_to_egraph(ir)
         stats, blacklist = explore(
             egraph,
-            callback_rules,
+            all_rules,
             max_iter=max_iter,
             max_nodes=max_nodes,
             root_cid=root_cid,
@@ -218,26 +214,9 @@ def _run_legacy_callback_bridge(
     return ir, cumulative_stats
 
 
-def _run_egglog(
-    ir: IRGraph,
-    max_iter: int,
-    max_nodes: int,
-    supported_ops: frozenset[str] | None = None,
-) -> tuple[EgglogBackend, ExploreStats]:
-    backend = EgglogBackend(ir)
-
-    explore_stats = backend.run_rules(
-        get_legalization_rules(),
-        max_iter=max_iter,
-        max_nodes=max_nodes,
-    )
-    opt_stats = backend.run_rules(
-        get_arithmetic_rules() + get_layout_rules() + get_fusion_rules(),
-        max_iter=min(3, max_iter),
-        max_nodes=max_nodes,
-    )
-    _merge_stats(explore_stats, opt_stats)
-    return backend, explore_stats
+def _load_egglog_for_extraction(ir: IRGraph) -> EgglogBackend:
+    """Load a saturated IR into egglog for cost-aware extraction only."""
+    return EgglogBackend(ir)
 
 
 def superoptimize(
@@ -262,11 +241,10 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes, supported_ops=supported_ops)
-    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
-    _merge_stats(bridge_stats, explore_stats)
+    ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)
+    backend = _load_egglog_for_extraction(ir)
     extracted = backend.extract_best(cost_model)
     opt_ir = extracted.ir
 
@@ -279,7 +257,7 @@ def superoptimize(
         output_path=output_path,
         original_nodes=original_nodes,
         optimized_nodes=_count_compute_nodes(opt_ir),
-        explore_stats=bridge_stats,
+        explore_stats=stats,
         estimated_cost=extracted.estimated_cost,
         contract_result=contract_result,
     )
@@ -305,11 +283,10 @@ def superoptimize_topk(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes, supported_ops=supported_ops)
-    backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
-    _merge_stats(bridge_stats, explore_stats)
+    ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)
+    backend = _load_egglog_for_extraction(ir)
     programs = backend.extract_topk(k=k, cost_model=cost_model)
 
     results: list[SuperoptResult] = []
@@ -325,7 +302,7 @@ def superoptimize_topk(
                 output_path=str(output_path),
                 original_nodes=original_nodes,
                 optimized_nodes=_count_compute_nodes(opt_ir),
-                explore_stats=bridge_stats,
+                explore_stats=stats,
                 estimated_cost=program.estimated_cost,
                 contract_result=contract_result,
             )

@@ -14,7 +14,7 @@ class PatternSpec:
     """Backend-independent tree pattern."""
 
     op: str
-    args: tuple[str | "PatternSpec", ...]
+    args: tuple[str | "PatternSpec", ...] # forward reference. 
     attrs: tuple[tuple[str, Any], ...] | None = None
 
 
