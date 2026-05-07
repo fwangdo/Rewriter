@@ -64,7 +64,8 @@ def _match_eclass(
     if isinstance(pattern, PatternVar):
         return [{pattern.name: cid}]
 
-    assert isinstance(pattern, PatternNode)
+    if not isinstance(pattern, PatternNode):
+        raise TypeError(f"expected PatternNode, got {type(pattern).__name__}")
     results: list[Subst] = []
     for enode in egraph.eclass_nodes(cid):
         if enode.op != pattern.op:

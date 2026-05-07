@@ -106,7 +106,8 @@ class RuleRunner(Folder):
         if spec.build_fn is not None:
             return self._apply_build_fn(node, spec, subst)
 
-        assert spec.target is not None
+        if spec.target is None:
+            raise ValueError(f"rule '{spec.name}' has no target and no build_fn")
         if isinstance(spec.target, str):
             replacement = subst[spec.target]
             self._replace_value(node.output[0], replacement)
@@ -132,7 +133,8 @@ class RuleRunner(Folder):
         spec: RuleSpec,
         subst: dict[str, str],
     ) -> bool:
-        assert spec.build_fn is not None
+        if spec.build_fn is None:
+            raise ValueError(f"rule '{spec.name}' routed to build_fn path but has no build_fn")
         builder = OnnxGraphBuilder(self, node, subst)
         final_value = spec.build_fn(builder, dict(subst))
         if not isinstance(final_value, str):

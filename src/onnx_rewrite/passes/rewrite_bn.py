@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing     import List, Tuple 
+from typing import List, Tuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -71,7 +71,8 @@ class RewriteBN(Folder):
         pred = self.get_producer(input_name)
         pred_consumers = self.get_consumers(pred.output[0]) if pred is not None and pred.output else []
 
-        assert scale is not None and bias is not None and mean is not None and var is not None
+        if any(v is None for v in (scale, bias, mean, var)):
+            raise ValueError(f"BatchNormalization '{node.name}' missing parameter initializers")
         return BnNodeContext(
             prefix=self.get_prefix(node),
             node=node,
@@ -267,7 +268,8 @@ class RewriteBN(Folder):
         if new_nodes is None:
             return
 
-        assert context.pred is not None
+        if context.pred is None:
+            raise ValueError(f"BN fusion requires a predecessor node for '{context.prefix}'")
         self.replace_node(context.pred, new_nodes)
         self.mark_for_removal(node)
         self.log.append(

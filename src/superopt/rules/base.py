@@ -81,7 +81,8 @@ def _instantiate(
             raise ValueError(f"unbound variable in target: {pattern.name}")
         return subst[pattern.name]
 
-    assert isinstance(pattern, PatternNode)
+    if not isinstance(pattern, PatternNode):
+        raise TypeError(f"expected PatternNode, got {type(pattern).__name__}")
     children = tuple(
         _instantiate(egraph, child, subst) for child in pattern.children
     )

@@ -75,7 +75,8 @@ def _build_check(checks: tuple[VarCheck, ...]):
 
 
 def _build_apply(spec: RuleSpec):
-    assert spec.build_fn is not None
+    if spec.build_fn is None:
+        raise ValueError(f"_build_apply called for rule '{spec.name}' without build_fn")
 
     def _apply(egraph: EGraph, match_cid: EClassId, subst: Subst) -> EClassId:
         builder = EGraphBuilder(egraph, match_cid, subst)

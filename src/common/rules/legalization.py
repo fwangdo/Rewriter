@@ -712,7 +712,7 @@ def _build_equal_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
         return builder.get_match()
     try:
         result = (a_data == b_data).astype(np.float32)
-    except Exception:
+    except (ValueError, TypeError):
         return builder.get_match()
     return builder.add_array(result, f"__equal_folded_{id(result)}")
 
@@ -725,7 +725,7 @@ def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
         return builder.get_match()
     try:
         result = (a_data < b_data).astype(np.float32)
-    except Exception:
+    except (ValueError, TypeError):
         return builder.get_match()
     return builder.add_array(result, f"__less_folded_{id(result)}")
 

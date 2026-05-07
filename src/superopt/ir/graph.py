@@ -29,7 +29,8 @@ class IRGraph:
 
     # for debugging. 
     def __repr__(self) -> str:
-        assert self.root is not None
+        if self.root is None:
+            return "IRGraph(empty)"
 
         visited = {}  # memo: node_id -> sexpr string
 

@@ -225,7 +225,7 @@ class ConstantFolding(Folder):
     def _rewrite_evaluable_node(self, node: onnx.NodeProto) -> None:
         try:
             value = self._evaluate_constant_node(node)
-        except Exception:
+        except (ValueError, TypeError, RuntimeError, ArithmeticError):
             return
         if value is None:
             return

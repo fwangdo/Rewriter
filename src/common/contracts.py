@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Shared operator contracts for ONNX rewrite and future superopt stages."""
+
+from __future__ import annotations
 
 BENCHMARK_ONNX_OPSET = 17
 BENCHMARK_ONNX_MIN_OPSET = 13
