@@ -88,6 +88,8 @@ class Folder:
         self.consumers_by_input = {}
 
         for node in self.graph.node:
+            if node in self.nodes_to_remove:
+                continue
             for input_name in node.input:
                 if not input_name:
                     continue

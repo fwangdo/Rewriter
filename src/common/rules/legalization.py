@@ -396,7 +396,7 @@ def _build_range_decompose(builder: GraphBuilder, vars: dict[str, object]) -> ob
 
 def _build_erf_to_tanh(builder: GraphBuilder, vars: dict[str, object]) -> object:
     c1 = builder.add_scalar(0.044715, "__erf_c1")
-    c2 = builder.add_scalar(0.7978845608, "__erf_c2")
+    c2 = builder.add_scalar(1.1283791671, "__erf_c2")
     one = builder.add_scalar(1.0, "__erf_one")
     x2 = builder.add_op("Mul", [vars["?x"], vars["?x"]])
     cx2 = builder.add_op("Mul", [c1, x2])

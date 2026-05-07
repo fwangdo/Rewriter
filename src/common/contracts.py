@@ -47,6 +47,7 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Cos",
         "Div",
         "Equal",
+        "Erf",
         "Expand",
         "Gather",
         "Greater",
