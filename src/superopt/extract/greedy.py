@@ -92,8 +92,6 @@ def extract_topk(
             if nid in blacklist:
                 continue
             enode = egraph.enode(nid)
-            if not cost_model.is_legal(enode):
-                continue
             child_lists = []
             extractable = True
             for child in enode.children:
@@ -128,15 +126,18 @@ def extract_topk(
                     egraph.eclass(egraph.find(c)).data.shape
                     for c in enode.children
                 ]
-                total = cost_model.node_cost(
+                # Use node-local cost for ranking.  Adding full subtree
+                # costs causes double-counting when children share
+                # sub-DAGs, which inflates decomposed alternatives and
+                # defeats legality-driven extraction.
+                node_cost = cost_model.node_cost(
                     enode,
                     output_shape=ec_data.shape,
                     input_shapes=child_shapes,
                 )
                 choices: dict[EClassId, ENode] = {}
                 conflict = False
-                for child_cost, child_choices in combo:
-                    total += child_cost
+                for _child_cost, child_choices in combo:
                     for child_choice_cid, child_choice_enode in child_choices.items():
                         existing = choices.get(child_choice_cid)
                         if existing is not None and existing != child_choice_enode:
@@ -152,7 +153,7 @@ def extract_topk(
                 if sig in seen:
                     continue
                 seen.add(sig)
-                candidates.append((total, choices))
+                candidates.append((node_cost, choices))
 
         candidates.sort(key=lambda item: item[0])
         best[cid] = candidates[:k]

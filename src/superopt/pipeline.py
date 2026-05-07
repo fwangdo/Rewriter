@@ -170,18 +170,19 @@ def _run_legacy_callback_bridge(
     ir: IRGraph,
     max_iter: int,
     max_nodes: int,
+    supported_ops: frozenset[str] | None = None,
 ) -> tuple[IRGraph, ExploreStats]:
     """Run callback rules through the hand-rolled e-graph before egglog.
 
     egglog handles pure pattern rewrites.  Rules with ``check`` or ``apply_fn``
     require Python-side value inspection or synthetic constant generation,
     which egglog's Python API does not support.  This bridge runs those
-    rules through the hand-rolled e-graph in a single pass, then returns the
-    materialized IR for subsequent egglog saturation.
+    rules iteratively — each pass may expose new match sites for subsequent
+    rules (e.g. Sub→Add+Neg, then Neg→Mul*-1).
     """
-    stats = ExploreStats()
+    cumulative_stats = ExploreStats()
     if max_iter <= 0:
-        return ir, stats
+        return ir, cumulative_stats
 
     callback_rules = [
         rule
@@ -189,19 +190,27 @@ def _run_legacy_callback_bridge(
         if rule.check is not None or rule.apply_fn is not None
     ]
     if not callback_rules:
-        return ir, stats
+        return ir, cumulative_stats
 
-    egraph, root_cid = ir_to_egraph(ir)
-    stats, blacklist = explore(
-        egraph,
-        callback_rules,
-        max_iter=max_iter,
-        max_nodes=max_nodes,
-        root_cid=root_cid,
-    )
-    bridged_ir = extract_greedy(egraph, root_cid, CostModel(), blacklist=blacklist)
-    _attach_initializers(bridged_ir, ir)
-    return bridged_ir, stats
+    cost_model = CostModel(supported_ops=supported_ops)
+
+    for _ in range(max_iter):
+        egraph, root_cid = ir_to_egraph(ir)
+        stats, blacklist = explore(
+            egraph,
+            callback_rules,
+            max_iter=max_iter,
+            max_nodes=max_nodes,
+            root_cid=root_cid,
+        )
+        _merge_stats(cumulative_stats, stats)
+        if stats.total_applied == 0:
+            break
+        bridged_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
+        _attach_initializers(bridged_ir, ir)
+        ir = bridged_ir
+
+    return ir, cumulative_stats
 
 
 def _run_egglog(
@@ -248,7 +257,7 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes)
+    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes, supported_ops=supported_ops)
     backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
     _merge_stats(bridge_stats, explore_stats)
 
@@ -291,7 +300,7 @@ def superoptimize_topk(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes)
+    ir, bridge_stats = _run_legacy_callback_bridge(ir, max_iter, max_nodes, supported_ops=supported_ops)
     backend, explore_stats = _run_egglog(ir, max_iter, max_nodes, supported_ops=supported_ops)
     _merge_stats(bridge_stats, explore_stats)
 
