@@ -1,10 +1,12 @@
 """End-to-end superoptimization pipeline.
 
-ONNX load → shape inference → onnx_to_ir → e-graph saturation → egglog
-extraction → ir_to_onnx → save.
+ONNX → pre-passes → IR → e-graph saturation (legalization) → egglog
+(pure algebraic rules + cost-aware extraction) → IR → ONNX.
 
-All rewrite rules (legalization, arithmetic, layout, fusion) run on the
-hand-rolled e-graph.  egglog is used only for cost-aware extraction.
+Legalization rules run on the hand-rolled e-graph (they need Python
+callbacks for weight inspection / constant synthesis).  Pure algebraic
+rules (commutativity, associativity) run in egglog where cycle-creating
+rewrites are handled natively by the equality saturation engine.
 """
 
 from __future__ import annotations
@@ -170,21 +172,18 @@ def _run_egraph_saturation(
     max_nodes: int,
     supported_ops: frozenset[str] | None = None,
 ) -> tuple[IRGraph, ExploreStats]:
-    """Run all rewrite rules through the hand-rolled e-graph.
+    """Run rewrite rules through the hand-rolled e-graph.
 
-    All rules (legalization, arithmetic, layout, fusion) are unified here.
-    egglog is used only for cost-aware extraction downstream.
+    Legalization rules (which need Python callbacks) run here.
+    Pure algebraic rules (commutativity, associativity) are left to egglog
+    because they create cycles that the iterative extract-rebuild loop
+    cannot handle.
     """
     cumulative_stats = ExploreStats()
     if max_iter <= 0:
         return ir, cumulative_stats
 
-    all_rules = (
-        get_legalization_rules()
-        + get_arithmetic_rules()
-        + get_layout_rules()
-        + get_fusion_rules()
-    )
+    all_rules = get_legalization_rules()
     if not all_rules:
         return ir, cumulative_stats
 
@@ -214,9 +213,26 @@ def _run_egraph_saturation(
     return ir, cumulative_stats
 
 
-def _load_egglog_for_extraction(ir: IRGraph) -> EgglogBackend:
-    """Load a saturated IR into egglog for cost-aware extraction only."""
-    return EgglogBackend(ir)
+def _load_egglog_for_extraction(
+    ir: IRGraph,
+    max_iter: int = 3,
+    max_nodes: int = 50_000,
+) -> tuple[EgglogBackend, ExploreStats]:
+    """Load IR into egglog, run pure algebraic rules, then extract.
+
+    Pure rules (commutativity, associativity) create cycles that the
+    iterative extract-rebuild loop cannot handle, so they run here in
+    egglog where saturation and extraction are a single phase.
+    """
+    backend = EgglogBackend(ir)
+    all_pure = (
+        get_legalization_rules()
+        + get_arithmetic_rules()
+        + get_layout_rules()
+        + get_fusion_rules()
+    )
+    stats = backend.run_rules(all_pure, max_iter=max_iter, max_nodes=max_nodes)
+    return backend, stats
 
 
 def superoptimize(
@@ -244,7 +260,8 @@ def superoptimize(
     ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)
-    backend = _load_egglog_for_extraction(ir)
+    backend, egg_stats = _load_egglog_for_extraction(ir, max_iter=min(3, max_iter), max_nodes=max_nodes)
+    _merge_stats(stats, egg_stats)
     extracted = backend.extract_best(cost_model)
     opt_ir = extracted.ir
 
@@ -286,7 +303,8 @@ def superoptimize_topk(
     ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)
-    backend = _load_egglog_for_extraction(ir)
+    backend, egg_stats = _load_egglog_for_extraction(ir, max_iter=min(3, max_iter), max_nodes=max_nodes)
+    _merge_stats(stats, egg_stats)
     programs = backend.extract_topk(k=k, cost_model=cost_model)
 
     results: list[SuperoptResult] = []
