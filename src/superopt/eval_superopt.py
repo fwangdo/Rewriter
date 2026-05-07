@@ -10,9 +10,6 @@ import argparse
 import json
 import sys
 import tempfile
-from pathlib import Path
-
-import onnx
 
 from ..common.contracts import LLM_SUPPORTED_OPS, VISION_SUPPORTED_OPS
 from .pipeline import superoptimize

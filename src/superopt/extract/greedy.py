@@ -74,7 +74,6 @@ def extract_topk(
 
     # Collect all reachable e-class ids from root.
     reachable = _reachable_eclasses(egraph, root_cid)
-    reachable_set = set(reachable)
 
     # Map canonical e-class id -> top candidates for that e-class.
     # Each candidate is (cost, choices), where choices maps every reachable

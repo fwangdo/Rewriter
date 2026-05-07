@@ -433,7 +433,7 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
 
 
 def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    a_value, w_value, b_value = vars["?a"], vars["?w"], vars["?b"]
+    a_value, _, b_value = vars["?a"], vars["?w"], vars["?b"]
     trans_a, trans_b, alpha, beta = _get_gemm_attrs(builder)
 
     w_data = builder.get_weight_data("?w")

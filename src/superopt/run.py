@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 
 from ..common.contracts import LLM_SUPPORTED_OPS, VISION_SUPPORTED_OPS
 from .pipeline import superoptimize

@@ -41,7 +41,6 @@ class IRGraph:
 
             # initializer (constant)
             if node_id in self.initializers:
-                val = self.initializers[node_id]
                 res = f"(Const {node_id})"
                 visited[node_id] = res
                 return res

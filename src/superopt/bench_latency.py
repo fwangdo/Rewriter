@@ -165,7 +165,7 @@ def main():
             if r_so.get("status") == "OK":
                 print(f"  [superopt] BEST: {r_so['latency_ms']:.2f} ms")
             else:
-                print(f"  [superopt] no valid candidate found")
+                print("  [superopt] no valid candidate found")
 
         results.append({
             "name": name,
