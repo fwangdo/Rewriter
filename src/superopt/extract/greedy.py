@@ -34,10 +34,10 @@ def extract_greedy(
 ) -> IRGraph:
     """Extract the lowest-cost program from *egraph* rooted at *root_cid*.
 
-    Algorithm (bottom-up):
-    1. Topologically sort e-classes by dependency.
-    2. For each e-class pick the best (legal, lowest-cost) e-node.
-    3. If no legal e-node exists, fall back to the lowest-cost one.
+    Algorithm (bottom-up iterative):
+    1. Collect all reachable e-classes from root.
+    2. Iteratively resolve e-classes whose children are already resolved.
+    3. For each e-class pick the best (lowest-cost) e-node.
     4. Build an IRGraph from chosen e-nodes.
 
     Blacklisted e-node ids (from cycle post-processing) are skipped.
@@ -63,15 +63,18 @@ def extract_topk(
     This is a bounded bottom-up k-best extractor. It is still greedy at each
     e-class boundary, but it keeps multiple alternatives so later validation
     can choose the fastest candidate that passes correctness.
+
+    Uses iterative fixpoint instead of topological sort so that cycles in the
+    e-graph (common after rule application) are handled correctly.
     """
     if blacklist is None:
         blacklist = set()
     if k <= 0:
         return []
 
-    # Collect all reachable e-class ids from root in topological order
-    # (leaves first) via DFS post-order.
+    # Collect all reachable e-class ids from root.
     reachable = _reachable_eclasses(egraph, root_cid)
+    reachable_set = set(reachable)
 
     # Map canonical e-class id -> top candidates for that e-class.
     # Each candidate is (cost, choices), where choices maps every reachable
@@ -83,7 +86,7 @@ def extract_topk(
     ) -> tuple[tuple[EClassId, ENode], ...]:
         return tuple(sorted(choices.items(), key=lambda item: item[0]))
 
-    for cid in reachable:
+    def _try_extract_class(cid: EClassId) -> list[tuple[float, dict[EClassId, ENode]]]:
         ec = egraph.eclass(cid)
         candidates: list[tuple[float, dict[EClassId, ENode]]] = []
         seen: set[tuple[tuple[EClassId, ENode], ...]] = set()
@@ -105,16 +108,12 @@ def extract_topk(
                 continue
 
             # Limit combinations to avoid exponential blowup.
-            # Only combine the single best from each child (greedy),
-            # then add alternatives by varying one child at a time.
             if not child_lists:
                 all_combos: list[tuple] = [()]
             else:
                 all_combos = []
-                # Base: best from each child
                 base = tuple(cl[0] for cl in child_lists)
                 all_combos.append(base)
-                # Variations: swap one child at a time
                 for ci, cl in enumerate(child_lists):
                     for alt in cl[1:k]:
                         variant = list(base)
@@ -156,44 +155,63 @@ def extract_topk(
                 candidates.append((node_cost, choices))
 
         candidates.sort(key=lambda item: item[0])
-        best[cid] = candidates[:k]
-        if not best[cid]:
-            raise ValueError(f"cannot extract e-class {cid}: no e-nodes available")
+        return candidates[:k]
+
+    # Iterative fixpoint: keep resolving e-classes whose children are ready
+    # until no more progress is made.  This handles cycles correctly —
+    # e-classes in cycles will remain unresolved but non-cycle classes
+    # will all be extracted.
+    changed = True
+    while changed:
+        changed = False
+        for cid in reachable:
+            if cid in best:
+                continue
+            candidates = _try_extract_class(cid)
+            if candidates:
+                best[cid] = candidates
+                changed = True
 
     root = egraph.find(root_cid)
+    if not best.get(root):
+        raise ValueError("cannot extract: root e-class has no candidates")
     return [
         ExtractedProgram(
-            cost=cost, ir=_build_ir_from_choices(egraph, reachable, choices, root)
+            cost=cost, ir=_build_ir_from_choices(egraph, best, choices, root)
         )
         for cost, choices in best[root][:k]
     ]
 
 
 def _reachable_eclasses(egraph: EGraph, root_cid: EClassId) -> list[EClassId]:
+    """Collect all e-class ids reachable from root."""
     reachable: list[EClassId] = []
     visited: set[EClassId] = set()
 
-    def _dfs_postorder(cid: EClassId) -> None:
+    def _dfs(cid: EClassId) -> None:
         cid = egraph.find(cid)
         if cid in visited:
             return
         visited.add(cid)
         for enode in egraph.eclass_nodes(cid):
             for child in enode.children:
-                _dfs_postorder(egraph.find(child))
+                _dfs(egraph.find(child))
         reachable.append(cid)
 
-    _dfs_postorder(egraph.find(root_cid))
+    _dfs(egraph.find(root_cid))
     return reachable
 
 
 def _build_ir_from_choices(
     egraph: EGraph,
-    reachable: list[EClassId],
+    best: dict[EClassId, list[tuple[float, dict[EClassId, ENode]]]],
     choices: dict[EClassId, ENode],
     root_cid: EClassId,
 ) -> IRGraph:
-    """Reconstruct an IRGraph from selected e-nodes."""
+    """Reconstruct an IRGraph from selected e-nodes.
+
+    Builds nodes in dependency order by following chosen e-node children.
+    """
 
     ir = IRGraph()
 
@@ -204,18 +222,21 @@ def _build_ir_from_choices(
         return f"_e{cid}"
 
     cid_to_node_id: dict[EClassId, str] = {}
-    for cid in reachable:
+
+    def _build(cid: EClassId) -> str:
+        cid = egraph.find(cid)
+        if cid in cid_to_node_id:
+            return cid_to_node_id[cid]
         if cid not in choices:
-            continue
+            raise ValueError(
+                f"cannot build e-class {cid}: not in extraction choices"
+            )
         enode = choices[cid]
+
+        # Build children first (handles arbitrary ordering).
         child_ids: list[str] = []
         for child in enode.children:
-            child_cid = egraph.find(child)
-            if child_cid not in cid_to_node_id:
-                raise ValueError(
-                    f"cannot build e-class {cid}: child {child_cid} was not built"
-                )
-            child_ids.append(cid_to_node_id[child_cid])
+            child_ids.append(_build(egraph.find(child)))
 
         nid = _node_id(cid)
         if nid in ir.nodes:
@@ -232,7 +253,8 @@ def _build_ir_from_choices(
             )
         )
         cid_to_node_id[cid] = nid
+        return nid
 
-    root_id = cid_to_node_id[egraph.find(root_cid)]
-    ir.root = root_id
+    _build(root_cid)
+    ir.root = cid_to_node_id[egraph.find(root_cid)]
     return ir

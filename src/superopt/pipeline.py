@@ -206,6 +206,11 @@ def _run_legacy_callback_bridge(
         _merge_stats(cumulative_stats, stats)
         if stats.total_applied == 0:
             break
+        # Never blacklist nodes in the root e-class — the extractor must
+        # be able to pick the root to build a valid program.
+        root_canon = egraph.find(root_cid)
+        root_nodes = set(egraph.eclass(root_canon).nodes)
+        blacklist -= root_nodes
         bridged_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
         _attach_initializers(bridged_ir, ir)
         ir = bridged_ir

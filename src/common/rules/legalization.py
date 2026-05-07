@@ -119,6 +119,13 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             build_fn=_build_where_mask_decompose,
             family="legalization",
         ),
+        # General Where: Where(c,A,B) → Cast(c)*A + (1-Cast(c))*B
+        RuleSpec(
+            name="where_to_arithmetic",
+            source=P("Where", ("?cond", "?true", "?false")),
+            build_fn=_build_where_to_arithmetic,
+            family="legalization",
+        ),
         RuleSpec(
             name="range_decompose",
             source=P("Range", ("?start", "?limit", "?step")),
@@ -158,6 +165,160 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("MatMul", ("?a", "?w")),
             checks=(VarCheck("?w", is_constant=True),),
             build_fn=_build_matmul_to_conv,
+            family="legalization",
+        ),
+        # Clip(x, 0, max) → Relu(x) - Relu(x - max)
+        RuleSpec(
+            name="clip_to_relu",
+            source=P("Clip", ("?x", "?min", "?max")),
+            checks=(
+                VarCheck("?min", scalar_close=0.0),
+                VarCheck("?max", is_constant=True),
+            ),
+            build_fn=_build_clip_to_relu,
+            family="legalization",
+        ),
+        # Shape(x) → constant fold when shape is fully static
+        RuleSpec(
+            name="shape_fold",
+            source=P("Shape", ("?x",)),
+            checks=(VarCheck("?x", has_shape=True),),
+            build_fn=_build_shape_fold,
+            family="legalization",
+        ),
+        # ConstantOfShape(shape) → constant tensor when shape input is constant
+        RuleSpec(
+            name="constantofshape_fold",
+            source=P("ConstantOfShape", ("?shape",)),
+            checks=(VarCheck("?shape", is_constant=True),),
+            build_fn=_build_constantofshape_fold,
+            family="legalization",
+        ),
+        # Flatten(x) → Reshape(x, [d0*...*d_{axis-1}, d_axis*...*d_n])
+        RuleSpec(
+            name="flatten_to_reshape",
+            source=P("Flatten", ("?x",)),
+            checks=(VarCheck("?x", has_shape=True),),
+            build_fn=_build_flatten_to_reshape,
+            family="legalization",
+        ),
+        # Gelu(x) → x * Sigmoid(1.702 * x)  (SiLU approximation)
+        RuleSpec(
+            name="gelu_decompose",
+            source=P("Gelu", ("?x",)),
+            build_fn=_build_gelu_decompose,
+            family="legalization",
+        ),
+        # LeakyRelu(x, alpha) → Relu(x) + alpha*(x - Relu(x))
+        RuleSpec(
+            name="leakyrelu_decompose",
+            source=P("LeakyRelu", ("?x",)),
+            build_fn=_build_leakyrelu_decompose,
+            family="legalization",
+        ),
+        # Expand(x, shape) → Mul(x, ones) when target shape is constant
+        RuleSpec(
+            name="expand_to_mul_ones",
+            source=P("Expand", ("?x", "?shape")),
+            checks=(VarCheck("?shape", is_constant=True),),
+            build_fn=_build_expand_to_mul_ones,
+            family="legalization",
+        ),
+        # Cos(x) → constant fold when x is constant
+        RuleSpec(
+            name="cos_fold",
+            source=P("Cos", ("?x",)),
+            checks=(VarCheck("?x", is_constant=True),),
+            build_fn=_build_cos_fold,
+            family="legalization",
+        ),
+        # Sin(x) → constant fold when x is constant
+        RuleSpec(
+            name="sin_fold",
+            source=P("Sin", ("?x",)),
+            checks=(VarCheck("?x", is_constant=True),),
+            build_fn=_build_sin_fold,
+            family="legalization",
+        ),
+        # HardSigmoid(x) → Relu(x*a + b) - Relu(x*a + b - 1)
+        RuleSpec(
+            name="hardsigmoid_decompose",
+            source=P("HardSigmoid", ("?x",)),
+            build_fn=_build_hardsigmoid_decompose,
+            family="legalization",
+        ),
+        # HardSwish(x) → x * HardSigmoid(x)  (decomposed further)
+        RuleSpec(
+            name="hardswish_decompose",
+            source=P("HardSwish", ("?x",)),
+            build_fn=_build_hardswish_decompose,
+            family="legalization",
+        ),
+        # Pad(x, pads, val) → identity when all pads are zero
+        RuleSpec(
+            name="pad_eliminate_zero",
+            source=P("Pad", ("?x", "?pads")),
+            checks=(VarCheck("?pads", is_constant=True),),
+            build_fn=_build_pad_eliminate_zero,
+            family="legalization",
+        ),
+        # Equal/Less/Greater with constant → Cast(comparison) for known patterns
+        RuleSpec(
+            name="equal_fold",
+            source=P("Equal", ("?a", "?b")),
+            checks=(
+                VarCheck("?a", is_constant=True),
+                VarCheck("?b", is_constant=True),
+            ),
+            build_fn=_build_equal_fold,
+            family="legalization",
+        ),
+        RuleSpec(
+            name="less_fold",
+            source=P("Less", ("?a", "?b")),
+            checks=(
+                VarCheck("?a", is_constant=True),
+                VarCheck("?b", is_constant=True),
+            ),
+            build_fn=_build_less_fold,
+            family="legalization",
+        ),
+        # Not(x) → 1 - Cast(x, float) for boolean tensors (via arithmetic)
+        RuleSpec(
+            name="not_to_sub",
+            source=P("Not", ("?x",)),
+            build_fn=_build_not_to_sub,
+            family="legalization",
+        ),
+        # Abs(x) → Relu(x) + Relu(-x)  = Relu(x) + Relu(Mul(x, -1))
+        RuleSpec(
+            name="abs_decompose",
+            source=P("Abs", ("?x",)),
+            build_fn=_build_abs_decompose,
+            family="legalization",
+        ),
+        # Reciprocal(x) → Div(1, x)
+        RuleSpec(
+            name="reciprocal_to_div",
+            source=P("Reciprocal", ("?x",)),
+            build_fn=lambda builder, vars: builder.add_op(
+                "Div", [builder.add_scalar(1.0), vars["?x"]]
+            ),
+            family="legalization",
+        ),
+        # Ceil/Floor with constant input → fold
+        RuleSpec(
+            name="ceil_fold",
+            source=P("Ceil", ("?x",)),
+            checks=(VarCheck("?x", is_constant=True),),
+            build_fn=_build_ceil_fold,
+            family="legalization",
+        ),
+        RuleSpec(
+            name="floor_fold",
+            source=P("Floor", ("?x",)),
+            checks=(VarCheck("?x", is_constant=True),),
+            build_fn=_build_floor_fold,
             family="legalization",
         ),
     ]
@@ -333,6 +494,274 @@ def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> obj
     t2 = builder.add_op("Transpose", [conv], attrs={"perm": (0, 2, 1, 3)})
     reshape_out_shape = builder.add_array(np.array([-1, n_size], dtype=np.int64), f"__reshape_n1_{n_size}", dtype_code=7)
     return builder.add_op("Reshape", [t2, reshape_out_shape])
+
+
+def _build_clip_to_relu(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Clip(x, 0, max) → Relu(x) - Relu(x - max).
+
+    Works for ReLU6 and any Clip with min=0 and constant max.
+    Identity: x<0 → 0-0=0; 0<=x<=max → x-0=x; x>max → x-(x-max)=max.
+    """
+    max_data = builder.get_weight_data("?max")
+    if max_data is None:
+        return builder.get_match()
+    max_val = float(max_data.flat[0])
+    relu_x = builder.add_op("Relu", [vars["?x"]])
+    max_const = builder.add_scalar(max_val, f"__clip_max_{max_val}")
+    shifted = builder.add_op("Sub", [vars["?x"], max_const])
+    relu_shifted = builder.add_op("Relu", [shifted])
+    return builder.add_op("Sub", [relu_x, relu_shifted])
+
+
+def _build_shape_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Shape(x) → constant int64 tensor when shape is fully static."""
+    shape = builder.get_shape("?x")
+    if shape is None or any(d < 0 for d in shape):
+        return builder.get_match()
+    return builder.add_array(
+        np.array(shape, dtype=np.int64), f"__shape_const_{shape}", dtype_code=7
+    )
+
+
+def _build_constantofshape_fold(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """ConstantOfShape(shape) → constant tensor filled with the default value."""
+    shape_data = builder.get_weight_data("?shape")
+    if shape_data is None:
+        return builder.get_match()
+    target_shape = tuple(int(d) for d in shape_data.flat)
+    if any(d < 0 for d in target_shape):
+        return builder.get_match()
+    # ConstantOfShape default value comes from the "value" attribute (scalar tensor).
+    # In the e-graph, numpy arrays are stored as (dtype_str, shape, bytes) tuples.
+    value_attr = builder.get_matched_attr("value")
+    if value_attr is not None:
+        if isinstance(value_attr, np.ndarray):
+            fill_val = float(value_attr.flat[0])
+        elif isinstance(value_attr, tuple) and len(value_attr) == 3:
+            dtype_str, _shape, data = value_attr
+            fill_val = float(np.frombuffer(data, dtype=np.dtype(dtype_str)).flat[0])
+        else:
+            try:
+                fill_val = float(value_attr)
+            except (TypeError, ValueError):
+                return builder.get_match()
+    else:
+        fill_val = 0.0
+    arr = np.full(target_shape, fill_val, dtype=np.float32)
+    return builder.add_array(arr, f"__constshape_{target_shape}_{fill_val}")
+
+
+def _build_flatten_to_reshape(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """Flatten(x, axis) → Reshape(x, [pre, post])."""
+    shape = builder.get_shape("?x")
+    if shape is None or any(d < 0 for d in shape):
+        return builder.get_match()
+    axis = builder.get_matched_attr("axis")
+    axis = 1 if axis is None else int(axis)
+    if axis < 0:
+        axis += len(shape)
+    pre = 1
+    for d in shape[:axis]:
+        pre *= d
+    post = 1
+    for d in shape[axis:]:
+        post *= d
+    flat_shape = np.array([pre, post], dtype=np.int64)
+    shape_w = builder.add_array(flat_shape, f"__flat_{pre}_{post}", dtype_code=7)
+    return builder.add_op("Reshape", [vars["?x"], shape_w])
+
+
+def _build_gelu_decompose(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """Gelu(x) → x * Sigmoid(1.702 * x).
+
+    Uses the SiLU-based GELU approximation (fast, accurate for inference).
+    """
+    c = builder.add_scalar(1.702, "__gelu_c")
+    cx = builder.add_op("Mul", [c, vars["?x"]])
+    sig = builder.add_op("Sigmoid", [cx])
+    return builder.add_op("Mul", [vars["?x"], sig])
+
+
+def _build_leakyrelu_decompose(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """LeakyRelu(x, alpha) → Relu(x) + alpha * (x - Relu(x))."""
+    alpha = builder.get_matched_attr("alpha")
+    alpha = 0.01 if alpha is None else float(alpha)
+    alpha_w = builder.add_scalar(alpha, f"__lrelu_alpha_{alpha}")
+    relu_x = builder.add_op("Relu", [vars["?x"]])
+    neg_part = builder.add_op("Sub", [vars["?x"], relu_x])
+    scaled_neg = builder.add_op("Mul", [alpha_w, neg_part])
+    return builder.add_op("Add", [relu_x, scaled_neg])
+
+
+def _build_expand_to_mul_ones(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """Expand(x, shape) → Mul(x, ones_of_shape).
+
+    Mul broadcasts x to the target shape automatically.
+    """
+    shape_data = builder.get_weight_data("?shape")
+    if shape_data is None:
+        return builder.get_match()
+    target_shape = tuple(int(d) for d in shape_data.flat)
+    if any(d < 0 for d in target_shape):
+        return builder.get_match()
+    ones = np.ones(target_shape, dtype=np.float32)
+    ones_w = builder.add_array(ones, f"__expand_ones_{target_shape}")
+    return builder.add_op("Mul", [vars["?x"], ones_w])
+
+
+def _build_cos_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Cos(x) → constant when x is a constant tensor."""
+    data = builder.get_weight_data("?x")
+    if data is None:
+        return builder.get_match()
+    result = np.cos(data).astype(np.float32)
+    return builder.add_array(result, f"__cos_folded_{id(result)}")
+
+
+def _build_sin_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Sin(x) → constant when x is a constant tensor."""
+    data = builder.get_weight_data("?x")
+    if data is None:
+        return builder.get_match()
+    result = np.sin(data).astype(np.float32)
+    return builder.add_array(result, f"__sin_folded_{id(result)}")
+
+
+def _build_hardsigmoid_decompose(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """HardSigmoid(x) → Relu(x*alpha + beta) - Relu(x*alpha + beta - 1).
+
+    Default: alpha=1/6, beta=0.5.
+    clip(x*a+b, 0, 1) = Relu(y) - Relu(y-1) where y = x*a + b.
+    """
+    alpha = builder.get_matched_attr("alpha")
+    beta = builder.get_matched_attr("beta")
+    alpha = 1.0 / 6.0 if alpha is None else float(alpha)
+    beta = 0.5 if beta is None else float(beta)
+    a = builder.add_scalar(alpha, f"__hsig_a_{alpha}")
+    b = builder.add_scalar(beta, f"__hsig_b_{beta}")
+    one = builder.add_scalar(1.0, "__hsig_one")
+    y = builder.add_op("Mul", [vars["?x"], a])
+    y = builder.add_op("Add", [y, b])
+    relu_y = builder.add_op("Relu", [y])
+    y_minus_1 = builder.add_op("Sub", [y, one])
+    relu_y1 = builder.add_op("Relu", [y_minus_1])
+    return builder.add_op("Sub", [relu_y, relu_y1])
+
+
+def _build_hardswish_decompose(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """HardSwish(x) → x * HardSigmoid(x), decomposed inline.
+
+    = x * clip(x/6 + 0.5, 0, 1)
+    = x * (Relu(x/6+0.5) - Relu(x/6-0.5))
+    """
+    a = builder.add_scalar(1.0 / 6.0, "__hswish_a")
+    b = builder.add_scalar(0.5, "__hswish_b")
+    one = builder.add_scalar(1.0, "__hswish_one")
+    y = builder.add_op("Mul", [vars["?x"], a])
+    y = builder.add_op("Add", [y, b])
+    relu_y = builder.add_op("Relu", [y])
+    y_minus_1 = builder.add_op("Sub", [y, one])
+    relu_y1 = builder.add_op("Relu", [y_minus_1])
+    hsig = builder.add_op("Sub", [relu_y, relu_y1])
+    return builder.add_op("Mul", [vars["?x"], hsig])
+
+
+def _build_pad_eliminate_zero(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """Pad(x, pads) → x when all pad values are zero."""
+    pads_data = builder.get_weight_data("?pads")
+    if pads_data is None:
+        return builder.get_match()
+    if np.all(pads_data == 0):
+        return vars["?x"]
+    return builder.get_match()
+
+
+def _build_where_to_arithmetic(
+    builder: GraphBuilder, vars: dict[str, object]
+) -> object:
+    """Where(cond, A, B) → Cast(cond)*A + (1-Cast(cond))*B."""
+    cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
+    one = builder.add_scalar(1.0, "__where_one")
+    inv = builder.add_op("Sub", [one, cast])
+    true_branch = builder.add_op("Mul", [cast, vars["?true"]])
+    false_branch = builder.add_op("Mul", [inv, vars["?false"]])
+    return builder.add_op("Add", [true_branch, false_branch])
+
+
+def _build_equal_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Equal(a, b) → constant bool tensor when both inputs are constant."""
+    a_data = builder.get_weight_data("?a")
+    b_data = builder.get_weight_data("?b")
+    if a_data is None or b_data is None:
+        return builder.get_match()
+    try:
+        result = (a_data == b_data).astype(np.float32)
+    except Exception:
+        return builder.get_match()
+    return builder.add_array(result, f"__equal_folded_{id(result)}")
+
+
+def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Less(a, b) → constant bool tensor when both inputs are constant."""
+    a_data = builder.get_weight_data("?a")
+    b_data = builder.get_weight_data("?b")
+    if a_data is None or b_data is None:
+        return builder.get_match()
+    try:
+        result = (a_data < b_data).astype(np.float32)
+    except Exception:
+        return builder.get_match()
+    return builder.add_array(result, f"__less_folded_{id(result)}")
+
+
+def _build_not_to_sub(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Not(x) → Sub(1, Cast(x, float))."""
+    cast = builder.add_op("Cast", [vars["?x"]], attrs={"to": 1})
+    one = builder.add_scalar(1.0, "__not_one")
+    return builder.add_op("Sub", [one, cast])
+
+
+def _build_abs_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Abs(x) → Relu(x) + Relu(Neg(x)) = Relu(x) + Relu(Mul(x, -1))."""
+    neg_one = builder.add_scalar(-1.0, "__abs_neg")
+    relu_pos = builder.add_op("Relu", [vars["?x"]])
+    neg_x = builder.add_op("Mul", [vars["?x"], neg_one])
+    relu_neg = builder.add_op("Relu", [neg_x])
+    return builder.add_op("Add", [relu_pos, relu_neg])
+
+
+def _build_ceil_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Ceil(x) → constant when x is constant."""
+    data = builder.get_weight_data("?x")
+    if data is None:
+        return builder.get_match()
+    result = np.ceil(data).astype(data.dtype)
+    return builder.add_array(result, f"__ceil_folded_{id(result)}")
+
+
+def _build_floor_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Floor(x) → constant when x is constant."""
+    data = builder.get_weight_data("?x")
+    if data is None:
+        return builder.get_match()
+    result = np.floor(data).astype(data.dtype)
+    return builder.add_array(result, f"__floor_folded_{id(result)}")
 
 
 def _get_gemm_attrs(builder: GraphBuilder) -> tuple[int, int, float, float]:
