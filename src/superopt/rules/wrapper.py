@@ -80,7 +80,7 @@ def _build_apply(spec: RuleSpec):
 
     def _apply(egraph: EGraph, match_cid: EClassId, subst: Subst) -> EClassId:
         builder = EGraphBuilder(egraph, match_cid, subst)
-        return spec.build_fn(builder, dict(subst))
+        return spec.build_fn(builder, dict(subst)) # type: ignore
 
     return _apply
 

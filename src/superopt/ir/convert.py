@@ -61,6 +61,7 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
 
     # --- graph inputs (exclude initializers) ---
     for inp in graph.input:
+        # exclude something in intializer. 
         if inp.name in init_names:
             continue
         shape = _extract_shape(inp)
@@ -88,6 +89,7 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
                 base_id = f"{base_id}_{node_index}"
             base_attrs = dict(attrs)
             base_attrs[_MULTI_OUTPUTS_ATTR] = live_outputs
+            # print(f'multi_node -> {node}')
             ir.add_node(IRNode(
                 id=base_id,
                 op=node.op_type,

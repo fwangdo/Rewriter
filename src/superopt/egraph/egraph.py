@@ -27,11 +27,11 @@ class EGraph:
 
     def __init__(self) -> None:
         # union-find parent map (canonical id → itself)
-        self._parent: dict[EClassId, EClassId] = {}
+        self._parent: dict[EClassId, EClassId] = {} # M 
         # e-class storage
-        self._classes: dict[EClassId, EClass] = {}
+        self._classes: dict[EClassId, EClass] = {} # U. 
         # all e-nodes, keyed by id
-        self._nodes: dict[ENodeId, ENode] = {}
+        self._nodes: dict[ENodeId, ENode] = {} # mapping. 
         # dedup memo: canonical ENode → e-class id
         self._memo: dict[ENode, EClassId] = {}
         # reverse map: enode id → owning e-class id

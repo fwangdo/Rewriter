@@ -96,15 +96,15 @@ def explore(
         if root_cid is not None:
             remove_cycles(egraph, root_cid, blacklist)
 
-        logger.debug(
-            "iter %d: matches=%d applied=%d eclasses=%d enodes=%d blacklisted=%d",
-            iteration,
-            len(matches),
-            applied,
-            len(egraph),
-            egraph.num_enodes,
-            len(blacklist),
-        )
+        # logger.debug(
+        #     "iter %d: matches=%d applied=%d eclasses=%d enodes=%d blacklisted=%d",
+        #     iteration,
+        #     len(matches),
+        #     applied,
+        #     len(egraph),
+        #     egraph.num_enodes,
+        #     len(blacklist),
+        # )
 
     stats.final_eclasses = len(egraph)
     stats.final_enodes = egraph.num_enodes

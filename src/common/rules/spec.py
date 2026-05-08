@@ -14,13 +14,15 @@ class PatternSpec:
     """Backend-independent tree pattern."""
 
     op: str
-    args: tuple[str | "PatternSpec", ...] # forward reference. 
+    # forward referecne. 
+    args: tuple[str | "PatternSpec", ...] # type: ignore 
     attrs: tuple[tuple[str, Any], ...] | None = None
 
 
 @dataclass(frozen=True)
 class VarCheck:
     """Small declarative guard over a matched pattern variable."""
+    # for marking specific properties of vars. 
 
     var: str
     scalar_close: float | None = None
@@ -72,4 +74,3 @@ class RuleSpec:
     target: PatternSpec | str | None = None
     checks: tuple[VarCheck, ...] = ()
     build_fn: BuildFn | None = None
-    family: str = ""

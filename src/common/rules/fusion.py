@@ -12,6 +12,6 @@ def get_fusion_specs() -> list[RuleSpec]:
             name="bias_add_commute",
             source=P("Add", (P("MatMul", ("?x", "?w")), "?b")),
             target=P("Add", ("?b", P("MatMul", ("?x", "?w")))),
-            family="fusion",
+
         ),
     ]

@@ -3,11 +3,7 @@
 from .arithmetic import get_arithmetic_specs
 from .fusion import get_fusion_specs
 from .layout import get_layout_specs
-from .legalization import (
-    get_legalization_specs,
-    get_pure_legalization_specs,
-    get_simple_build_legalization_specs,
-)
+from .legalization import get_legalization_specs
 from .spec import GraphBuilder, PatternSpec, RuleSpec, VarCheck
 
 __all__ = [
@@ -19,6 +15,4 @@ __all__ = [
     "get_fusion_specs",
     "get_layout_specs",
     "get_legalization_specs",
-    "get_pure_legalization_specs",
-    "get_simple_build_legalization_specs",
 ]

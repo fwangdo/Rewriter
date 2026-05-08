@@ -99,6 +99,7 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
             arr = ir.initializers[nid]
             if arr.size == 1:
                 scalar_value = float(arr.reshape(-1)[0])
+
         egraph.update_analysis(
             cid,
             AnalysisData(
@@ -228,13 +229,8 @@ def _load_egglog_for_extraction(
     egglog where saturation and extraction are a single phase.
     """
     backend = EgglogBackend(ir)
-    all_pure = (
-        get_legalization_rules()
-        + get_arithmetic_rules()
-        + get_layout_rules()
-        + get_fusion_rules()
-    )
-    stats = backend.run_rules(all_pure, max_iter=max_iter, max_nodes=max_nodes)
+    pure_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
+    stats = backend.run_rules(pure_rules, max_iter=max_iter, max_nodes=max_nodes)
     return backend, stats
 
 
@@ -260,10 +256,6 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-
-    # checking. 
-    sys.exit(1)
-
     ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)

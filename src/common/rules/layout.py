@@ -12,7 +12,7 @@ def get_layout_specs() -> list[RuleSpec]:
             name="reshape_reshape",
             source=P("Reshape", (P("Reshape", ("?x", "?y")), "?z")),
             target=P("Reshape", ("?x", "?z")),
-            family="layout",
+
         ),
     ]
     for perm in ((0, 1), (1, 0)):
@@ -23,7 +23,7 @@ def get_layout_specs() -> list[RuleSpec]:
                 name=f"transpose_cancel_perm_{suffix}",
                 source=P("Transpose", (P("Transpose", ("?x",), attrs=attrs),), attrs=attrs),
                 target="?x",
-                family="layout",
+    
             )
         )
     return rules

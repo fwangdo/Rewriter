@@ -8,106 +8,100 @@ from .spec import PatternSpec as P
 from .spec import GraphBuilder, RuleSpec, VarCheck
 
 
-def get_pure_legalization_specs() -> list[RuleSpec]:
-    """Rules that are pure source/target pattern rewrites."""
+def get_legalization_specs() -> list[RuleSpec]:
+    """All legalization rules as build rules."""
     return [
         RuleSpec(
             name="eliminate_identity",
             source=P("Identity", ("?x",)),
-            target="?x",
-            family="legalization",
+            build_fn=_build_eliminate_identity,
+
         ),
         RuleSpec(
             name="greater_to_less",
             source=P("Greater", ("?a", "?b")),
-            target=P("Less", ("?b", "?a")),
-            family="legalization",
+            build_fn=_build_greater_to_less,
+
         ),
         RuleSpec(
             name="sub_to_add_neg",
             source=P("Sub", ("?x", "?y")),
-            target=P("Add", ("?x", P("Neg", ("?y",)))),
-            family="legalization",
+            build_fn=_build_sub_to_add_neg,
+
         ),
         RuleSpec(
             name="clip_decompose",
             source=P("Clip", ("?x", "?min", "?max")),
-            target=P("Min", (P("Max", ("?x", "?min")), "?max")),
-            family="legalization",
+            build_fn=_build_clip_decompose,
+
         ),
-    ]
-
-
-def get_simple_build_legalization_specs() -> list[RuleSpec]:
-    """Rules with common build functions but no backend-specific semantics."""
-    return [
         RuleSpec(
             name="neg_to_mul",
             source=P("Neg", ("?x",)),
             build_fn=_build_neg_to_mul,
-            family="legalization",
+
         ),
         RuleSpec(
             name="squeeze_to_reshape",
             source=P("Squeeze", ("?x", "?axes")),
             checks=(VarCheck("?x", has_shape=True),),
             build_fn=_build_shape_to_reshape,
-            family="legalization",
+
         ),
         RuleSpec(
             name="unsqueeze_to_reshape",
             source=P("Unsqueeze", ("?x", "?axes")),
             checks=(VarCheck("?x", has_shape=True),),
             build_fn=_build_shape_to_reshape,
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_identity",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=1.0),),
             build_fn=lambda builder, vars: vars["?x"],
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_sqrt",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=0.5),),
             build_fn=lambda builder, vars: builder.add_op("Sqrt", [vars["?x"]]),
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_mul",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=2.0),),
             build_fn=lambda builder, vars: builder.add_op("Mul", [vars["?x"], vars["?x"]]),
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_cube",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=3.0),),
             build_fn=_build_pow_to_cube,
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_reciprocal",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=-1.0),),
             build_fn=_build_pow_to_reciprocal,
-            family="legalization",
+
         ),
         RuleSpec(
             name="pow_to_rsqrt",
             source=P("Pow", ("?x", "?e")),
             checks=(VarCheck("?e", scalar_close=-0.5),),
             build_fn=_build_pow_to_rsqrt,
-            family="legalization",
+
         ),
         RuleSpec(
             name="layernorm_decompose",
             source=P("LayerNormalization", ("?x", "?scale", "?bias")),
             build_fn=_build_layernorm_decompose,
-            family="legalization",
+
         ),
         RuleSpec(
             name="where_mask_decompose",
@@ -117,14 +111,14 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
                 VarCheck("?false", scalar_lte=-1.0e30),
             ),
             build_fn=_build_where_mask_decompose,
-            family="legalization",
+
         ),
         # General Where: Where(c,A,B) → Cast(c)*A + (1-Cast(c))*B
         RuleSpec(
             name="where_to_arithmetic",
             source=P("Where", ("?cond", "?true", "?false")),
             build_fn=_build_where_to_arithmetic,
-            family="legalization",
+
         ),
         RuleSpec(
             name="range_decompose",
@@ -134,38 +128,38 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
                 VarCheck("?step", scalar_close=1.0),
             ),
             build_fn=_build_range_decompose,
-            family="legalization",
+
         ),
         RuleSpec(
             name="erf_to_tanh",
             source=P("Erf", ("?x",)),
             build_fn=_build_erf_to_tanh,
-            family="legalization",
+
         ),
         RuleSpec(
             name="bn_decompose",
             source=P("BatchNormalization", ("?x", "?s", "?bn_b", "?bn_m", "?bn_v")),
             build_fn=_build_bn_decompose,
-            family="legalization",
+
         ),
         RuleSpec(
             name="gemm_decompose",
             source=P("Gemm", ("?a", "?w", "?b")),
             build_fn=_build_gemm_decompose,
-            family="legalization",
+
         ),
         RuleSpec(
             name="gemm_decompose_no_bias",
             source=P("Gemm", ("?a", "?w")),
             build_fn=_build_gemm_decompose_no_bias,
-            family="legalization",
+
         ),
         RuleSpec(
             name="matmul_to_conv",
             source=P("MatMul", ("?a", "?w")),
             checks=(VarCheck("?w", is_constant=True),),
             build_fn=_build_matmul_to_conv,
-            family="legalization",
+
         ),
         # Clip(x, 0, max) → Relu(x) - Relu(x - max)
         RuleSpec(
@@ -176,7 +170,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
                 VarCheck("?max", is_constant=True),
             ),
             build_fn=_build_clip_to_relu,
-            family="legalization",
+
         ),
         # Shape(x) → constant fold when shape is fully static
         RuleSpec(
@@ -184,7 +178,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Shape", ("?x",)),
             checks=(VarCheck("?x", has_shape=True),),
             build_fn=_build_shape_fold,
-            family="legalization",
+
         ),
         # ConstantOfShape(shape) → constant tensor when shape input is constant
         RuleSpec(
@@ -192,7 +186,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("ConstantOfShape", ("?shape",)),
             checks=(VarCheck("?shape", is_constant=True),),
             build_fn=_build_constantofshape_fold,
-            family="legalization",
+
         ),
         # Flatten(x) → Reshape(x, [d0*...*d_{axis-1}, d_axis*...*d_n])
         RuleSpec(
@@ -200,21 +194,21 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Flatten", ("?x",)),
             checks=(VarCheck("?x", has_shape=True),),
             build_fn=_build_flatten_to_reshape,
-            family="legalization",
+
         ),
         # Gelu(x) → x * Sigmoid(1.702 * x)  (SiLU approximation)
         RuleSpec(
             name="gelu_decompose",
             source=P("Gelu", ("?x",)),
             build_fn=_build_gelu_decompose,
-            family="legalization",
+
         ),
         # LeakyRelu(x, alpha) → Relu(x) + alpha*(x - Relu(x))
         RuleSpec(
             name="leakyrelu_decompose",
             source=P("LeakyRelu", ("?x",)),
             build_fn=_build_leakyrelu_decompose,
-            family="legalization",
+
         ),
         # Expand(x, shape) → Mul(x, ones) when target shape is constant
         RuleSpec(
@@ -222,7 +216,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Expand", ("?x", "?shape")),
             checks=(VarCheck("?shape", is_constant=True),),
             build_fn=_build_expand_to_mul_ones,
-            family="legalization",
+
         ),
         # Cos(x) → constant fold when x is constant
         RuleSpec(
@@ -230,7 +224,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Cos", ("?x",)),
             checks=(VarCheck("?x", is_constant=True),),
             build_fn=_build_cos_fold,
-            family="legalization",
+
         ),
         # Sin(x) → constant fold when x is constant
         RuleSpec(
@@ -238,21 +232,21 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Sin", ("?x",)),
             checks=(VarCheck("?x", is_constant=True),),
             build_fn=_build_sin_fold,
-            family="legalization",
+
         ),
         # HardSigmoid(x) → Relu(x*a + b) - Relu(x*a + b - 1)
         RuleSpec(
             name="hardsigmoid_decompose",
             source=P("HardSigmoid", ("?x",)),
             build_fn=_build_hardsigmoid_decompose,
-            family="legalization",
+
         ),
         # HardSwish(x) → x * HardSigmoid(x)  (decomposed further)
         RuleSpec(
             name="hardswish_decompose",
             source=P("HardSwish", ("?x",)),
             build_fn=_build_hardswish_decompose,
-            family="legalization",
+
         ),
         # Pad(x, pads, val) → identity when all pads are zero
         RuleSpec(
@@ -260,7 +254,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Pad", ("?x", "?pads")),
             checks=(VarCheck("?pads", is_constant=True),),
             build_fn=_build_pad_eliminate_zero,
-            family="legalization",
+
         ),
         # Equal/Less/Greater with constant → Cast(comparison) for known patterns
         RuleSpec(
@@ -271,7 +265,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
                 VarCheck("?b", is_constant=True),
             ),
             build_fn=_build_equal_fold,
-            family="legalization",
+
         ),
         RuleSpec(
             name="less_fold",
@@ -281,21 +275,21 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
                 VarCheck("?b", is_constant=True),
             ),
             build_fn=_build_less_fold,
-            family="legalization",
+
         ),
         # Not(x) → 1 - Cast(x, float) for boolean tensors (via arithmetic)
         RuleSpec(
             name="not_to_sub",
             source=P("Not", ("?x",)),
             build_fn=_build_not_to_sub,
-            family="legalization",
+
         ),
         # Abs(x) → Relu(x) + Relu(-x)  = Relu(x) + Relu(Mul(x, -1))
         RuleSpec(
             name="abs_decompose",
             source=P("Abs", ("?x",)),
             build_fn=_build_abs_decompose,
-            family="legalization",
+
         ),
         # Reciprocal(x) → Div(1, x)
         RuleSpec(
@@ -304,7 +298,7 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             build_fn=lambda builder, vars: builder.add_op(
                 "Div", [builder.add_scalar(1.0), vars["?x"]]
             ),
-            family="legalization",
+
         ),
         # Ceil/Floor with constant input → fold
         RuleSpec(
@@ -312,21 +306,34 @@ def get_simple_build_legalization_specs() -> list[RuleSpec]:
             source=P("Ceil", ("?x",)),
             checks=(VarCheck("?x", is_constant=True),),
             build_fn=_build_ceil_fold,
-            family="legalization",
+
         ),
         RuleSpec(
             name="floor_fold",
             source=P("Floor", ("?x",)),
             checks=(VarCheck("?x", is_constant=True),),
             build_fn=_build_floor_fold,
-            family="legalization",
+
         ),
     ]
 
 
-def get_legalization_specs() -> list[RuleSpec]:
-    """Return common legalization specs currently shared across backends."""
-    return get_pure_legalization_specs() + get_simple_build_legalization_specs()
+def _build_eliminate_identity(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    return vars["?x"]
+
+
+def _build_greater_to_less(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    return builder.add_op("Less", [vars["?b"], vars["?a"]])
+
+
+def _build_sub_to_add_neg(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    neg = builder.add_op("Neg", [vars["?y"]])
+    return builder.add_op("Add", [vars["?x"], neg])
+
+
+def _build_clip_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    clamped = builder.add_op("Max", [vars["?x"], vars["?min"]])
+    return builder.add_op("Min", [clamped, vars["?max"]])
 
 
 def _build_neg_to_mul(builder: GraphBuilder, vars: dict[str, object]) -> object:
