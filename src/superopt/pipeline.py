@@ -34,6 +34,9 @@ from .rules.fusion import get_fusion_rules
 from .rules.layout import get_layout_rules
 from .rules.legalization import get_legalization_rules
 
+#.. 
+import sys 
+
 _BOUNDARY_OPS = (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ)
 
 
@@ -257,6 +260,10 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
+
+    # checking. 
+    sys.exit(1)
+
     ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
     cost_model = CostModel(supported_ops=supported_ops)
@@ -278,51 +285,3 @@ def superoptimize(
         estimated_cost=extracted.estimated_cost,
         contract_result=contract_result,
     )
-
-
-# def superoptimize_topk(
-#     input_path: str | Path,
-#     output_dir: str | Path,
-#     supported_ops: frozenset[str] | None = None,
-#     max_iter: int = 15,
-#     max_nodes: int = 50_000,
-#     k: int = 5,
-# ) -> list[SuperoptResult]:
-#     """Materialize the top-k estimated-cost extraction candidates."""
-#     input_path = str(input_path)
-#     output_dir = Path(output_dir)
-#     output_dir.mkdir(parents=True, exist_ok=True)
-#     contract = (
-#         Contract(name="custom", supported_ops=frozenset(supported_ops))
-#         if supported_ops is not None
-#         else None
-#     )
-
-#     model, ir = _load_preprocessed_ir(input_path)
-#     original_nodes = _count_compute_nodes(ir)
-#     ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
-
-#     cost_model = CostModel(supported_ops=supported_ops)
-#     backend, egg_stats = _load_egglog_for_extraction(ir, max_iter=min(3, max_iter), max_nodes=max_nodes)
-#     _merge_stats(stats, egg_stats)
-#     programs = backend.extract_topk(k=k, cost_model=cost_model)
-
-#     results: list[SuperoptResult] = []
-#     for index, program in enumerate(programs):
-#         opt_ir = program.ir
-#         opt_model = _make_output_model(opt_ir, ir, model)
-#         contract_result = check_contract(opt_model, contract) if contract else None
-#         output_path = output_dir / f"candidate_{index}.onnx"
-#         onnx.save(opt_model, output_path)
-#         results.append(
-#             SuperoptResult(
-#                 input_path=input_path,
-#                 output_path=str(output_path),
-#                 original_nodes=original_nodes,
-#                 optimized_nodes=_count_compute_nodes(opt_ir),
-#                 explore_stats=stats,
-#                 estimated_cost=program.estimated_cost,
-#                 contract_result=contract_result,
-#             )
-#         )
-#     return results

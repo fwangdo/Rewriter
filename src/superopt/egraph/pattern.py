@@ -41,6 +41,7 @@ Pattern = Union[PatternVar, PatternNode]
 Subst = dict[str, EClassId]
 
 
+# search and matching algorithm.
 def search(
     egraph: EGraph, pattern: Pattern
 ) -> list[tuple[EClassId, Subst]]:
@@ -51,6 +52,7 @@ def search(
     results: list[tuple[EClassId, Subst]] = []
     for cid in _canonical_classes(egraph):
         for subst in _match_eclass(egraph, pattern, cid):
+            # get cid, and check pattern. 
             results.append((cid, subst))
     return results
 
@@ -62,10 +64,12 @@ def _match_eclass(
     cid = egraph.find(cid)
 
     if isinstance(pattern, PatternVar):
+        # Q. what does it mean?
         return [{pattern.name: cid}]
 
     if not isinstance(pattern, PatternNode):
         raise TypeError(f"expected PatternNode, got {type(pattern).__name__}")
+
     results: list[Subst] = []
     for enode in egraph.eclass_nodes(cid):
         if enode.op != pattern.op:
@@ -74,6 +78,7 @@ def _match_eclass(
             continue
         if pattern.attrs is not None and enode.attrs != pattern.attrs:
             continue
+
         # recursively match children
         child_substs = _match_children(egraph, pattern.children, enode.children)
         results.extend(child_substs)

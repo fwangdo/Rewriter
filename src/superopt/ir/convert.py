@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 from .graph import IRGraph
 from .node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+import sys 
 
 _MULTI_OUTPUTS_ATTR = "__outputs"
 _INPUT_SLOTS_ATTR = "__input_slots"
@@ -77,7 +78,7 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
         attrs = _extract_attrs(node)
         if node.name:
             attrs[_NODE_NAME_ATTR] = node.name
-        if any(input_name == "" for input_name in node.input):
+        if any(input_name == "" for input_name in node.input): # "" means optional. 
             attrs[_INPUT_SLOTS_ATTR] = tuple(node.input)
         live_outputs = tuple(output for output in node.output if output)
 

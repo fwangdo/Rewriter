@@ -37,6 +37,9 @@ class ConstantFolding(Folder):
             self.log.append(f" - Constant({node.name}) is folded into initializer")
 
     def _rewrite_constant_of_shape(self, node: onnx.NodeProto) -> None:
+        # precompute. 
+        # before: np -> constant of shape -> something
+        # after: np -> something. 
         shape_input = node.input[0]
         if shape_input in self.init_map:
             shape = self.init_map[shape_input].astype(np.int64)

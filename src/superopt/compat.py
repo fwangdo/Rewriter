@@ -33,7 +33,7 @@ def run_post_passes(model: onnx.ModelProto) -> onnx.ModelProto:
     Folds remaining constants and cleans up dead nodes.
     """
     model, _ = ConstantFolding().run(model)
-    model = onnx.shape_inference.infer_shapes(model)
+    model = onnx.shape_inference.infer_shapes(model, check_type=False)
     _ensure_output_shapes(model.graph)
     model, _ = Cleanup().run(model)
     return model
