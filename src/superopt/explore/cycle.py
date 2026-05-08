@@ -18,10 +18,11 @@ most recently added e-node. Repeat until cycle-free.
 
 from __future__ import annotations
 
+from src.common.rules.legalization import RuleSpec
+
 from ..egraph.enode import EClassId
 from ..egraph.egraph import EGraph
 from ..egraph.pattern import PatternNode, PatternVar, Subst
-from ..rules.base import RewriteRule
 
 DescendantMap = dict[EClassId, set[EClassId]]
 
@@ -84,7 +85,7 @@ def build_descendant_map(
 
 def will_create_cycle(
     egraph: EGraph,
-    rule: RewriteRule,
+    rule: RuleSpec,
     match_cid: EClassId,
     subst: Subst,
     descendant_map: DescendantMap,
@@ -93,7 +94,7 @@ def will_create_cycle(
 
     O(1) per call thanks to precomputed descendant_map.
     """
-    target_refs = _collect_var_refs(rule.target, subst)
+    target_refs = _collect_var_refs(rule.source, subst)
 
     match_canon = egraph.find(match_cid)
     for ref_cid in target_refs:

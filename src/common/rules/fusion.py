@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from .spec import PatternSpec as P
-from .spec import RuleSpec
+from .legalization import RuleSpec
+from src.superopt.egraph.pattern import PatternNode as PN, PatternVar as PV
 
 
 def get_fusion_specs() -> list[RuleSpec]:
     return [
         RuleSpec(
             name="bias_add_commute",
-            source=P("Add", (P("MatMul", ("?x", "?w")), "?b")),
-            target=P("Add", ("?b", P("MatMul", ("?x", "?w")))),
-
+            source=PN("Add", (PN("MatMul", (PV("?x"), PV("?w"))), PV("?b"))),
+            build_fn=lambda b, v: b.add_op("Add", [v["?b"], b.add_op("MatMul", [v["?x"], v["?w"]])]),
         ),
     ]

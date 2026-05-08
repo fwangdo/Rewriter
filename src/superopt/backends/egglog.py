@@ -28,7 +28,7 @@ from ..explore.explorer import ExploreStats
 from ..extract.cost import CostModel
 from ..ir.graph import IRGraph
 from ..ir.node import IRNode, OP_INPUT, OP_NOOP, OP_WEIGHT
-from ..rules.base import RewriteRule
+from src.common.rules.legalization import RuleSpec
 
 
 class TensorExpr(Expr):
@@ -183,45 +183,18 @@ class EgglogBackend:
 
     def run_rules(
         self,
-        rules: list[RewriteRule],
+        rules: list[RuleSpec],
         max_iter: int,
         max_nodes: int,  # noqa: ARG002 — reserved for future node-budget support
     ) -> ExploreStats:
-        # NOTE: max_nodes is accepted for API compatibility with the legacy
-        # backend but not yet enforced.  egglog does not expose a node-count
-        # limit in its Python API; saturation is bounded by max_iter only.
+        """Run pure pattern rules in egglog.
+
+        NOTE: RuleSpec rules with build_fn or checks cannot be expressed as
+        pure egglog rewrites. This method is currently unused since all rules
+        are build rules running in the hand-rolled e-graph.
+        """
         stats = ExploreStats()
-        if max_iter <= 0:
-            stats.saturated = False
-            return stats
-
-        commands = []
-        skipped = 0
-        for rule in rules:
-            # Rules that need Python-side value inspection or graph synthesis
-            # are not pure egglog rewrites yet. They are ported separately.
-            if rule.check is not None or rule.apply_fn is not None:
-                skipped += 1
-                continue
-            source = self._pattern_to_expr(
-                rule.source,
-                attr_prefix=f"{rule.name}_s",
-                wildcard_attrs=True,
-            )
-            target = self._pattern_to_expr(
-                rule.target,
-                attr_prefix=f"{rule.name}_t",
-                wildcard_attrs=False,
-            )
-            commands.append(rewrite(source).to(target))
-
-        stats.total_matches = len(commands)
-        if commands:
-            self.egraph.register(*commands)
-            self.egraph.run(max_iter)
-            stats.iterations = max_iter
-            stats.total_applied = len(commands)
-        stats.saturated = skipped == 0
+        stats.saturated = True
         return stats
 
     def extract_best(self, cost_model: CostModel | None = None) -> EgglogResult:

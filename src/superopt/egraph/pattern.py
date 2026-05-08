@@ -13,7 +13,7 @@ Follows Tensat's S-expression representation:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Union
+from typing import Any, Union, Tuple
 
 from .enode import EClassId
 from .egraph import EGraph
@@ -31,7 +31,7 @@ class PatternVar:
 class PatternNode:
     """A concrete operator that must match an e-node's op."""
     op: str
-    children: tuple[Pattern, ...]
+    children: Tuple[ PatternVar | PatternNode, ... ] 
     attrs: tuple[tuple[str, Any], ...] | None = None  # None = don't care
 
 

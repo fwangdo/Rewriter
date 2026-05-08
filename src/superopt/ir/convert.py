@@ -85,11 +85,10 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
 
         if len(live_outputs) > 1:
             base_id = node.name or f"{node.op_type}_{node_index}__multi"
-            while base_id in ir.nodes:
-                base_id = f"{base_id}_{node_index}"
+            if base_id in ir.nodes:
+                raise Exception(f'[ERROR]: {base_id} already exists.')
             base_attrs = dict(attrs)
             base_attrs[_MULTI_OUTPUTS_ATTR] = live_outputs
-            # print(f'multi_node -> {node}')
             ir.add_node(IRNode(
                 id=base_id,
                 op=node.op_type,

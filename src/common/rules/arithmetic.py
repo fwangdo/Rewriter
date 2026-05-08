@@ -2,34 +2,30 @@
 
 from __future__ import annotations
 
-from .spec import PatternSpec as P
-from .spec import RuleSpec
+from .legalization import RuleSpec
+from src.superopt.egraph.pattern import PatternNode as PN, PatternVar as PV
 
 
 def get_arithmetic_specs() -> list[RuleSpec]:
     return [
         RuleSpec(
             name="add_comm",
-            source=P("Add", ("?x", "?y")),
-            target=P("Add", ("?y", "?x")),
-
+            source=PN("Add", (PV("?x"), PV("?y"))),
+            build_fn=lambda b, v: b.add_op("Add", [v["?y"], v["?x"]]),
         ),
         RuleSpec(
             name="mul_comm",
-            source=P("Mul", ("?x", "?y")),
-            target=P("Mul", ("?y", "?x")),
-
+            source=PN("Mul", (PV("?x"), PV("?y"))),
+            build_fn=lambda b, v: b.add_op("Mul", [v["?y"], v["?x"]]),
         ),
         RuleSpec(
             name="add_assoc_right",
-            source=P("Add", (P("Add", ("?x", "?y")), "?z")),
-            target=P("Add", ("?x", P("Add", ("?y", "?z")))),
-
+            source=PN("Add", (PN("Add", (PV("?x"), PV("?y"))), PV("?z"))),
+            build_fn=lambda b, v: b.add_op("Add", [v["?x"], b.add_op("Add", [v["?y"], v["?z"]])]),
         ),
         RuleSpec(
             name="mul_assoc_right",
-            source=P("Mul", (P("Mul", ("?x", "?y")), "?z")),
-            target=P("Mul", ("?x", P("Mul", ("?y", "?z")))),
-
+            source=PN("Mul", (PN("Mul", (PV("?x"), PV("?y"))), PV("?z"))),
+            build_fn=lambda b, v: b.add_op("Mul", [v["?x"], b.add_op("Mul", [v["?y"], v["?z"]])]),
         ),
     ]

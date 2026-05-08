@@ -10,6 +10,7 @@ rewrites are handled natively by the equality saturation engine.
 """
 
 from __future__ import annotations
+from typing     import List 
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,10 +30,12 @@ from .extract.greedy import extract_greedy
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
-from .rules.arithmetic import get_arithmetic_rules
-from .rules.fusion import get_fusion_rules
-from .rules.layout import get_layout_rules
-from .rules.legalization import get_legalization_rules
+
+# rules.
+from src.common.rules.arithmetic import get_arithmetic_specs
+from src.common.rules.fusion import get_fusion_specs
+from src.common.rules.layout import get_layout_specs
+from src.common.rules.legalization import RuleSpec, get_legalization_specs
 
 #.. 
 import sys 
@@ -176,21 +179,22 @@ def _run_egraph_saturation(
     max_nodes: int,
     supported_ops: frozenset[str] | None = None,
 ) -> tuple[IRGraph, ExploreStats]:
-    """Run rewrite rules through the hand-rolled e-graph.
-
-    Legalization rules (which need Python callbacks) run here.
-    Pure algebraic rules (commutativity, associativity) are left to egglog
-    because they create cycles that the iterative extract-rebuild loop
-    cannot handle.
-    """
+    """Run all rewrite rules through the hand-rolled e-graph."""
     cumulative_stats = ExploreStats()
     if max_iter <= 0:
         return ir, cumulative_stats
 
-    all_rules = get_legalization_rules()
+    all_rules: List[RuleSpec] = (
+        get_legalization_specs()
+        + get_arithmetic_specs()
+        + get_layout_specs()
+        + get_fusion_specs()
+    )
+
     if not all_rules:
         return ir, cumulative_stats
 
+    # TODO: make this one reasonable. egg should be helpful for industry problems. 
     cost_model = CostModel(supported_ops=supported_ops)
 
     for _ in range(max_iter):
@@ -217,21 +221,9 @@ def _run_egraph_saturation(
     return ir, cumulative_stats
 
 
-def _load_egglog_for_extraction(
-    ir: IRGraph,
-    max_iter: int = 3,
-    max_nodes: int = 50_000,
-) -> tuple[EgglogBackend, ExploreStats]:
-    """Load IR into egglog, run pure algebraic rules, then extract.
-
-    Pure rules (commutativity, associativity) create cycles that the
-    iterative extract-rebuild loop cannot handle, so they run here in
-    egglog where saturation and extraction are a single phase.
-    """
-    backend = EgglogBackend(ir)
-    pure_rules = get_arithmetic_rules() + get_layout_rules() + get_fusion_rules()
-    stats = backend.run_rules(pure_rules, max_iter=max_iter, max_nodes=max_nodes)
-    return backend, stats
+def _load_egglog_for_extraction(ir: IRGraph) -> EgglogBackend:
+    """Load a saturated IR into egglog for cost-aware extraction."""
+    return EgglogBackend(ir)
 
 
 def superoptimize(

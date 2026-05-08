@@ -8,23 +8,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.common.rules.legalization import RuleSpec
+
 from ..egraph.enode import EClassId
 from ..egraph.egraph import EGraph
 from ..egraph.pattern import Subst, search
-from ..rules.base import RewriteRule
 
 
 @dataclass
 class Match:
     """A single match of a rewrite rule."""
 
-    rule: RewriteRule
+    rule: RuleSpec
     eclass_id: EClassId
     subst: Subst
 
 
 def find_all_matches(
-    egraph: EGraph, rules: list[RewriteRule]
+    egraph: EGraph, rules: list[RuleSpec]
 ) -> list[Match]:
     """Search for all matches of all rules in the e-graph.
 

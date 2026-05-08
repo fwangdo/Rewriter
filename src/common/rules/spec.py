@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import numpy as np
+from src.superopt.egraph.pattern import Pattern
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,6 @@ class RuleSpec:
     """Backend-independent rewrite rule specification."""
 
     name: str
-    source: PatternSpec
-    target: PatternSpec | str | None = None
+    source: Pattern
+    build_fn: BuildFn
     checks: tuple[VarCheck, ...] = ()
-    build_fn: BuildFn | None = None

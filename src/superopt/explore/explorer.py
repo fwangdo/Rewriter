@@ -1,8 +1,4 @@
-"""Legacy exploration phase for the hand-rolled e-graph.
-
-New optimization runs use ``superopt.backends.egglog.EgglogBackend`` as the
-primary backend. This module is still called only by the temporary bridge for
-legacy ``check``/``apply_fn`` rules.
+"""Exploration phase for the hand-rolled e-graph.
 
 This is the main loop of equality saturation.
 Each iteration:
@@ -20,9 +16,11 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from src.common.rules.legalization import RuleSpec
+
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId
-from ..rules.base import RewriteRule, apply_rule
+from ..rules.base import apply_rule
 from .cycle import build_descendant_map, remove_cycles, will_create_cycle
 from .matcher import find_all_matches
 
@@ -43,7 +41,7 @@ class ExploreStats:
 
 def explore(
     egraph: EGraph,
-    rules: list[RewriteRule],
+    rules: list[RuleSpec],
     max_iter: int = 15,
     max_nodes: int = 50_000,
     root_cid: EClassId | None = None,
@@ -95,16 +93,6 @@ def explore(
         # 4. Layer 2: post-process to remove any cycles that slipped through
         if root_cid is not None:
             remove_cycles(egraph, root_cid, blacklist)
-
-        # logger.debug(
-        #     "iter %d: matches=%d applied=%d eclasses=%d enodes=%d blacklisted=%d",
-        #     iteration,
-        #     len(matches),
-        #     applied,
-        #     len(egraph),
-        #     egraph.num_enodes,
-        #     len(blacklist),
-        # )
 
     stats.final_eclasses = len(egraph)
     stats.final_enodes = egraph.num_enodes
