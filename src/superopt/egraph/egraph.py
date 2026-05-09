@@ -70,7 +70,7 @@ class EGraph:
         self._nodes[nid] = canon
         ec.nodes.add(nid)
         self._memo[canon] = cid
-        self._node_to_class[nid] = cid # M 
+        self._node_to_class[nid] = cid 
 
         # Register parent links: this enode is a parent of each child eclass
         for child_cid in canon.children:
@@ -124,6 +124,7 @@ class EGraph:
         return 
 
     def _repair(self, cid: EClassId, worklist: deque) -> None:
+        # upward merge.
         ec = self._classes[cid]
 
         # Phase 1: Re-canonicalize parent enodes, update memo, detect congruences
@@ -136,6 +137,7 @@ class EGraph:
                 {c: self.find(c) for c in old_enode.children}
             )
             self._nodes[nid] = new_enode
+
             # Remove stale memo entry
             self._memo.pop(old_enode, None)
 
@@ -206,3 +208,7 @@ class EGraph:
         """Join analysis data into an e-class without discarding prior facts."""
         ec = self.eclass(cid)
         ec.data = AnalysisData.join(ec.data, data)
+
+    def show_format(self, cid: EClassId) -> ENode: 
+        elem = self.eclass_nodes(cid)[0]
+        return elem

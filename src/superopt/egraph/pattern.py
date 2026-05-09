@@ -18,6 +18,10 @@ from typing import Any, Union, Tuple
 from .enode import EClassId
 from .egraph import EGraph
 
+import logging 
+
+logger = logging.getLogger(__name__)
+
 
 # --- Pattern AST ---
 
@@ -61,10 +65,10 @@ def _match_eclass(
     egraph: EGraph, pattern: Pattern, cid: EClassId
 ) -> list[Subst]:
     """Try to match ``pattern`` against e-class ``cid``."""
-    cid = egraph.find(cid)
+    # main algorithm of matching. 
+    cid = egraph.find(cid) # we dont have to do this. but it's safe. 
 
     if isinstance(pattern, PatternVar):
-        # Q. what does it mean?
         return [{pattern.name: cid}]
 
     if not isinstance(pattern, PatternNode):
@@ -72,12 +76,17 @@ def _match_eclass(
 
     results: list[Subst] = []
     for enode in egraph.eclass_nodes(cid):
+        # three conds. 
         if enode.op != pattern.op:
             continue
         if len(enode.children) != len(pattern.children):
             continue
         if pattern.attrs is not None and enode.attrs != pattern.attrs:
             continue
+
+        # logging e-class.. 
+        logger.debug(f'[E-class]: {egraph.show_format(cid)}')
+        logger.debug(f'[Pattern]: {pattern}\n')
 
         # recursively match children
         child_substs = _match_children(egraph, pattern.children, enode.children)
@@ -95,6 +104,7 @@ def _match_children(
     Returns all consistent substitutions (variables with the same name
     must map to the same e-class).
     """
+    # base case(tail). 
     if not patterns:
         return [{}]
 
@@ -104,11 +114,14 @@ def _match_children(
     rest_children = children[1:]
 
     results: list[Subst] = []
+    # if first child is not matched with first pattern, it's done and return []. 
     for subst in _match_eclass(egraph, first_pattern, first_child):
         for rest_subst in _match_children(egraph, rest_patterns, rest_children):
             merged = _merge_substs(subst, rest_subst)
             if merged is not None:
                 results.append(merged)
+
+    logger.debug(f'[Children]: {results}\n')
     return results
 
 

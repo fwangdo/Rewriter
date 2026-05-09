@@ -21,7 +21,7 @@ class Match:
 
     rule: RuleSpec
     eclass_id: EClassId
-    subst: Subst
+    subst: Subst # dict[str, EClassId]
 
 
 def find_all_matches(

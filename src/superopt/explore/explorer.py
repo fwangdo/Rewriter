@@ -14,6 +14,7 @@ Reference: Tensat Algorithm 2.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 
 from src.common.rules.legalization import RuleSpec
@@ -25,7 +26,6 @@ from .cycle import build_descendant_map, remove_cycles, will_create_cycle
 from .matcher import find_all_matches
 
 logger = logging.getLogger(__name__)
-
 
 @dataclass
 class ExploreStats:
@@ -67,6 +67,8 @@ def explore(
         # 1. find all matches
         matches = find_all_matches(egraph, rules)
         stats.total_matches += len(matches)
+
+        sys.exit(1)
 
         if not matches:
             stats.saturated = True
