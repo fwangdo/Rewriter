@@ -1,12 +1,6 @@
 """End-to-end superoptimization pipeline.
 
-ONNX → pre-passes → IR → e-graph saturation (legalization) → egglog
-(pure algebraic rules + cost-aware extraction) → IR → ONNX.
-
-Legalization rules run on the hand-rolled e-graph (they need Python
-callbacks for weight inspection / constant synthesis).  Pure algebraic
-rules (commutativity, associativity) run in egglog where cycle-creating
-rewrites are handled natively by the equality saturation engine.
+ONNX → pre-passes → IR → e-graph saturation → greedy extraction → ONNX.
 """
 
 from __future__ import annotations
@@ -21,7 +15,6 @@ from pathlib import Path
 import numpy as np
 import onnx
 
-from .backends.egglog import EgglogBackend
 from .compat import run_post_passes, run_pre_passes
 from .contracts import Contract, check_contract
 from .egraph.eclass import AnalysisData
@@ -167,26 +160,16 @@ def _load_preprocessed_ir(input_path: str) -> tuple[onnx.ModelProto, IRGraph]:
     return model, onnx_to_ir(model)
 
 
-def _merge_stats(dst: ExploreStats, src: ExploreStats) -> None:
-    dst.iterations += src.iterations
-    dst.total_matches += src.total_matches
-    dst.total_applied += src.total_applied
-    dst.final_eclasses = src.final_eclasses
-    dst.final_enodes = src.final_enodes
-    dst.saturated = dst.saturated and src.saturated
-    return 
-
 
 def _run_egraph_saturation(
     ir: IRGraph,
     max_iter: int,
     max_nodes: int,
-    supported_ops: frozenset[str] | None = None,
-) -> tuple[IRGraph, ExploreStats]:
-    """Run all rewrite rules through the hand-rolled e-graph."""
-    cumulative_stats = ExploreStats()
-    if max_iter <= 0:
-        return ir, cumulative_stats
+) -> tuple[EGraph, EClassId, set[int], ExploreStats]:
+    """Saturate the e-graph with all rewrite rules. No extraction."""
+    egraph, root_cid = ir_to_egraph(ir)
+    stats = ExploreStats()
+    blacklist: set[int] = set()
 
     all_rules: List[RuleSpec] = (
         get_legalization_specs()
@@ -195,14 +178,7 @@ def _run_egraph_saturation(
         + get_fusion_specs()
     )
 
-    if not all_rules:
-        return ir, cumulative_stats
-
-    # TODO: make this one reasonable. egg should be helpful for industry problems. 
-    cost_model = CostModel(supported_ops=supported_ops)
-
-    for _ in range(max_iter):
-        egraph, root_cid = ir_to_egraph(ir)
+    if all_rules and max_iter > 0:
         stats, blacklist = explore(
             egraph,
             all_rules,
@@ -210,26 +186,8 @@ def _run_egraph_saturation(
             max_iter=max_iter,
             max_nodes=max_nodes,
         )
-        _merge_stats(cumulative_stats, stats)
-        if stats.total_applied == 0:
-            break
-        # Never blacklist nodes in the root e-class — the extractor must
-        # be able to pick the root to build a valid program.
 
-        # TODO.   
-        root_canon = egraph.find(root_cid)
-        root_nodes = set(egraph.eclass(root_canon).nodes)
-        blacklist -= root_nodes
-        bridged_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
-        _attach_initializers(bridged_ir, ir)
-        ir = bridged_ir
-
-    return ir, cumulative_stats
-
-
-def _load_egglog_for_extraction(ir: IRGraph) -> EgglogBackend:
-    """Load a saturated IR into egglog for cost-aware extraction."""
-    return EgglogBackend(ir)
+    return egraph, root_cid, blacklist, stats
 
 
 def superoptimize(
@@ -254,13 +212,15 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
-    ir, stats = _run_egraph_saturation(ir, max_iter, max_nodes, supported_ops=supported_ops)
 
+    # 1. Saturation
+    egraph, root_cid, blacklist, stats = _run_egraph_saturation(
+        ir, max_iter, max_nodes,
+    )
+
+    # 2. Extraction
     cost_model = CostModel(supported_ops=supported_ops)
-    backend, egg_stats = _load_egglog_for_extraction(ir, max_iter=min(3, max_iter), max_nodes=max_nodes)
-    _merge_stats(stats, egg_stats)
-    extracted = backend.extract_best(cost_model)
-    opt_ir = extracted.ir
+    opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
 
     opt_model = _make_output_model(opt_ir, ir, model)
     contract_result = check_contract(opt_model, contract) if contract else None
@@ -272,6 +232,5 @@ def superoptimize(
         original_nodes=original_nodes,
         optimized_nodes=_count_compute_nodes(opt_ir),
         explore_stats=stats,
-        estimated_cost=extracted.estimated_cost,
         contract_result=contract_result,
     )

@@ -108,6 +108,7 @@ def remove_cycles(
         if cycle is None:
             break
         # Blacklist the newest node in the cycle (highest nid = added last).
+        # it's heuristic. 
         newest = max(cycle)
         blacklist.add(newest)
     
@@ -125,9 +126,12 @@ def _find_one_cycle(
     Back-edge to a gray node means a cycle exists.
     """
     root_cid = egraph.find(root_cid)
+    # current stack to detect recursion. 
     in_progress: set[EClassId] = set()
+    # alreay done. it is not in current scpe. 
     done: set[EClassId] = set()
 
+    # 3 color dfs. 
     def _dfs(cid: EClassId) -> list[ENodeId] | None:
         cid = egraph.find(cid)
         if cid in done:
@@ -149,6 +153,7 @@ def _find_one_cycle(
                 if result is not None:
                     result.append(nid)
                     return result
+
         in_progress.discard(cid)
         done.add(cid)
         return None

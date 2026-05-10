@@ -1,8 +1,4 @@
-"""Legacy greedy extraction for the hand-rolled e-graph.
-
-Egglog extraction lives in ``superopt.backends.egglog``. This extractor is
-still used only by the temporary bridge that materializes legacy
-``check``/``apply_fn`` rules before handing the graph back to egglog.
+"""Greedy extraction for the e-graph.
 
 Selects the lowest-cost legal e-node per e-class to reconstruct an IRGraph.
 """
@@ -30,7 +26,7 @@ def extract_greedy(
     egraph: EGraph,
     root_cid: EClassId,
     cost_model: CostModel,
-    blacklist: set[int] | None = None,
+    blacklist: set[int],
 ) -> IRGraph:
     """Extract the lowest-cost program from *egraph* rooted at *root_cid*.
 
@@ -45,7 +41,7 @@ def extract_greedy(
     if blacklist is None:
         blacklist = set()
 
-    programs = extract_topk(egraph, root_cid, cost_model, k=1, blacklist=blacklist)
+    programs = extract_topk(egraph, root_cid, cost_model, blacklist, k=1)
     if not programs:
         raise ValueError("cannot extract: no candidate programs")
     return programs[0].ir
@@ -55,8 +51,8 @@ def extract_topk(
     egraph: EGraph,
     root_cid: EClassId,
     cost_model: CostModel,
+    blacklist: set[int],
     k: int = 5,
-    blacklist: set[int] | None = None,
 ) -> list[ExtractedProgram]:
     """Extract the k lowest estimated-cost programs.
 
@@ -67,11 +63,6 @@ def extract_topk(
     Uses iterative fixpoint instead of topological sort so that cycles in the
     e-graph (common after rule application) are handled correctly.
     """
-    if blacklist is None:
-        blacklist = set()
-    if k <= 0:
-        return []
-
     # Collect all reachable e-class ids from root.
     reachable = _reachable_eclasses(egraph, root_cid)
 

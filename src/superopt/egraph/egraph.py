@@ -1,12 +1,4 @@
-"""Legacy hand-rolled e-graph data structure.
-
-The main superopt pipeline uses ``superopt.backends.egglog`` as the primary
-equality saturation and extraction backend. This implementation is still used
-as a temporary bridge for legacy ``check``/``apply_fn`` rules that synthesize
-constants or inspect Python-side tensor values.
-
-This module is intentionally kept for reference and for code that still uses
-the old Pattern/RewriteRule representation during the egglog migration.
+"""E-graph data structure.
 
 Implements union-find based e-class management, e-node deduplication,
 and the rebuild operation that restores invariants after merges.
