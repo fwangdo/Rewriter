@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from src.common.rules.legalization import RuleSpec
 
-from ..egraph.enode import EClassId
+from ..egraph.enode import EClassId, ENodeId
 from ..egraph.egraph import EGraph
 from ..egraph.pattern import PatternNode, PatternVar, Subst
 
@@ -29,57 +29,40 @@ DescendantMap = dict[EClassId, set[EClassId]]
 
 def build_descendant_map(
     egraph: EGraph,
-    blacklist: set[int] | None = None,
+    blacklist: set[ENodeId],
 ) -> DescendantMap:
     """Precompute the set of descendant e-classes for every canonical e-class.
 
-    Uses iterative post-order DFS.  O(V + E) total.
+    Recursive post-order DFS.  O(V + E) total.
     Blacklisted e-node ids are skipped.
     """
-    if blacklist is None:
-        blacklist = set()
     cache: DescendantMap = {}
+    in_progress: set[EClassId] = set()
 
-    for start in egraph.canonical_class_ids():
-        if start in cache:
-            continue
-        # iterative post-order DFS
-        stack: list[tuple[EClassId, bool]] = [(start, False)]
-        in_progress: set[EClassId] = set()
-        while stack:
-            cid, processed = stack.pop()
-            cid = egraph.find(cid)
-            if cid in cache:
+    def _dfs(cid: EClassId) -> set[EClassId]:
+        cid = egraph.find(cid)
+        if cid in cache:
+            return cache[cid]
+        if cid in in_progress:
+            cache[cid] = set()
+            return cache[cid]
+
+        in_progress.add(cid)
+        desc: set[EClassId] = set()
+        for nid in egraph.eclass(cid).nodes:
+            if nid in blacklist:
                 continue
-            if processed:
-                desc: set[EClassId] = set()
-                ec = egraph.eclass(cid)
-                for nid in ec.nodes:
-                    if nid in blacklist:
-                        continue
-                    enode = egraph.enode(nid)
-                    for child in enode.children:
-                        child = egraph.find(child)
-                        desc.add(child)
-                        if child in cache:
-                            desc |= cache[child]
-                cache[cid] = desc
-                in_progress.discard(cid)
-                continue
-            if cid in in_progress:
-                cache[cid] = set()
-                continue
-            in_progress.add(cid)
-            stack.append((cid, True))
-            ec = egraph.eclass(cid)
-            for nid in ec.nodes:
-                if nid in blacklist:
-                    continue
-                enode = egraph.enode(nid)
-                for child in enode.children:
-                    child = egraph.find(child)
-                    if child not in cache and child not in in_progress:
-                        stack.append((child, False))
+            for child in egraph.enode(nid).children:
+                child = egraph.find(child)
+                desc.add(child)
+                desc |= _dfs(child)
+        cache[cid] = desc
+        in_progress.discard(cid)
+        return desc
+
+    for cid in egraph.canonical_class_ids():
+        _dfs(cid)
+
     return cache
 
 
@@ -109,7 +92,7 @@ def will_create_cycle(
 def remove_cycles(
     egraph: EGraph,
     root_cid: EClassId,
-    blacklist: set[int],
+    blacklist: set[ENodeId],
 ) -> None:
     """Layer 2: find and blacklist e-nodes that form cycles.
 
@@ -127,51 +110,47 @@ def remove_cycles(
         # Blacklist the newest node in the cycle (highest nid = added last).
         newest = max(cycle)
         blacklist.add(newest)
+    
+    return 
 
 
 def _find_one_cycle(
     egraph: EGraph,
     root_cid: EClassId,
-    blacklist: set[int],
-) -> list[int] | None:
-    """DFS from root, return the nids forming a cycle, or None."""
+    blacklist: set[ENodeId],
+) -> list[ENodeId] | None:
+    """DFS from root, return the nids forming a cycle, or None.
+
+    3-color DFS (CLRS): white=unvisited, gray=in-progress, black=done.
+    Back-edge to a gray node means a cycle exists.
+    """
     root_cid = egraph.find(root_cid)
+    in_progress: set[EClassId] = set()
+    done: set[EClassId] = set()
 
-    # States: 0 = unvisited, 1 = in-progress, 2 = done
-    state: dict[EClassId, int] = {}
-    # For each in-progress eclass, record which nid we used to enter it
-    path_nids: dict[EClassId, int] = {}
-
-    def _dfs(cid: EClassId) -> list[int] | None:
+    def _dfs(cid: EClassId) -> list[ENodeId] | None:
         cid = egraph.find(cid)
-        s = state.get(cid, 0)
-        if s == 2:
+        if cid in done:
             return None
-        if s == 1:
-            # Back-edge: cycle found. Collect nids along the path
-            # from cid back to cid via the recursion stack.
-            return []  # sentinel: caller will build the cycle
+        if cid in in_progress:
+            return []  # back-edge found, caller appends nids
 
-        state[cid] = 1
-        ec = egraph.eclass(cid)
-        for nid in sorted(ec.nodes):
+        in_progress.add(cid)
+        for nid in sorted(egraph.eclass(cid).nodes):
             if nid in blacklist:
                 continue
-            enode = egraph.enode(nid)
-            path_nids[cid] = nid
-            for child in enode.children:
+            for child in egraph.enode(nid).children:
                 child = egraph.find(child)
-                child_state = state.get(child, 0)
-                if child_state == 2:
+                if child in done:
                     continue
-                if child_state == 1:
-                    # Back-edge to an ancestor. Return cycle.
+                if child in in_progress:
                     return [nid]
                 result = _dfs(child)
                 if result is not None:
                     result.append(nid)
                     return result
-        state[cid] = 2
+        in_progress.discard(cid)
+        done.add(cid)
         return None
 
     return _dfs(root_cid)

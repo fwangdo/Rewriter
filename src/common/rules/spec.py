@@ -26,11 +26,11 @@ class VarCheck:
     # for marking specific properties of vars. 
 
     var: str
-    scalar_close: float | None = None
-    scalar_abs_lt: float | None = None
-    scalar_lte: float | None = None
-    is_constant: bool | None = None
-    has_shape: bool | None = None
+    scalar_close: float | None = None  # scalar 값이 이 값과 근사해야 함 (|v - x| <= 1e-6)
+    scalar_abs_lt: float | None = None  # scalar 절댓값이 이 값 미만이어야 함 (|v| < x)
+    scalar_lte: float | None = None  # scalar 값이 이 값 이하여야 함 (v <= x)
+    is_constant: bool | None = None  # 상수(weight) 노드인지 여부
+    has_shape: bool | None = None  # shape 정보가 존재하는지 여부
 
 
 class GraphBuilder(Protocol):

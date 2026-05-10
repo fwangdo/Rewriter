@@ -174,6 +174,8 @@ class EGraph:
             for nid in ec.parents:
                 p_cid = self.find(self._node_to_class[nid])
                 worklist.append(p_cid)
+        
+        return 
 
     # --- query ---
 

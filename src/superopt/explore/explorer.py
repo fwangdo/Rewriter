@@ -42,9 +42,9 @@ class ExploreStats:
 def explore(
     egraph: EGraph,
     rules: list[RuleSpec],
+    root_cid: EClassId,
     max_iter: int = 15,
     max_nodes: int = 50_000,
-    root_cid: EClassId | None = None,
 ) -> tuple[ExploreStats, set[int]]:
     """Run the exploration phase on the e-graph.
 
@@ -67,8 +67,6 @@ def explore(
         # 1. find all matches
         matches = find_all_matches(egraph, rules)
         stats.total_matches += len(matches)
-
-        sys.exit(1)
 
         if not matches:
             stats.saturated = True
@@ -93,8 +91,7 @@ def explore(
         egraph.rebuild()
 
         # 4. Layer 2: post-process to remove any cycles that slipped through
-        if root_cid is not None:
-            remove_cycles(egraph, root_cid, blacklist)
+        remove_cycles(egraph, root_cid, blacklist)
 
     stats.final_eclasses = len(egraph)
     stats.final_enodes = egraph.num_enodes

@@ -85,12 +85,15 @@ def _match_eclass(
             continue
 
         # logging e-class.. 
-        logger.debug(f'[E-class]: {egraph.show_format(cid)}')
-        logger.debug(f'[Pattern]: {pattern}\n')
+        # logger.debug(f'[E-class]: {egraph.show_format(cid)}')
+        # logger.debug(f'[Pattern]: {pattern}\n')
 
         # recursively match children
         child_substs = _match_children(egraph, pattern.children, enode.children)
         results.extend(child_substs)
+
+    if len(results) > 0:
+        logging.debug(results)
     return results
 
 
@@ -115,13 +118,14 @@ def _match_children(
 
     results: list[Subst] = []
     # if first child is not matched with first pattern, it's done and return []. 
+    # substs are generated from "e-node". that's why multiple substitutions can be. ㅇㄹ
     for subst in _match_eclass(egraph, first_pattern, first_child):
         for rest_subst in _match_children(egraph, rest_patterns, rest_children):
             merged = _merge_substs(subst, rest_subst)
             if merged is not None:
                 results.append(merged)
 
-    logger.debug(f'[Children]: {results}\n')
+    # logger.debug(f'[Children]: {results}\n')
     return results
 
 

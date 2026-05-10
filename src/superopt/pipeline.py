@@ -10,7 +10,10 @@ rewrites are handled natively by the equality saturation engine.
 """
 
 from __future__ import annotations
-from typing     import List 
+from typing     import List
+
+import sys
+sys.setrecursionlimit(10**7)
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -171,6 +174,7 @@ def _merge_stats(dst: ExploreStats, src: ExploreStats) -> None:
     dst.final_eclasses = src.final_eclasses
     dst.final_enodes = src.final_enodes
     dst.saturated = dst.saturated and src.saturated
+    return 
 
 
 def _run_egraph_saturation(
@@ -202,15 +206,17 @@ def _run_egraph_saturation(
         stats, blacklist = explore(
             egraph,
             all_rules,
+            root_cid=root_cid,
             max_iter=max_iter,
             max_nodes=max_nodes,
-            root_cid=root_cid,
         )
         _merge_stats(cumulative_stats, stats)
         if stats.total_applied == 0:
             break
         # Never blacklist nodes in the root e-class — the extractor must
         # be able to pick the root to build a valid program.
+
+        # TODO.   
         root_canon = egraph.find(root_cid)
         root_nodes = set(egraph.eclass(root_canon).nodes)
         blacklist -= root_nodes

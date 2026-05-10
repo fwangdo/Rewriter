@@ -50,6 +50,7 @@ def _check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> b
         cid = subst.get(check.var)
         if cid is None:
             return False
+
         data = egraph.eclass(cid).data
         if check.scalar_close is not None:
             if data.scalar_value is None:
