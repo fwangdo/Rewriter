@@ -13,6 +13,8 @@ from ..ir.graph import IRGraph
 from ..ir.node import IRNode
 from .cost import CostModel
 
+_Candidate = tuple[float, dict[EClassId, ENode]]
+
 
 @dataclass(frozen=True)
 class ExtractedProgram:
@@ -69,83 +71,7 @@ def extract_topk(
     # Map canonical e-class id -> top candidates for that e-class.
     # Each candidate is (cost, choices), where choices maps every reachable
     # e-class in the subtree to the selected e-node for that e-class.
-    best: dict[EClassId, list[tuple[float, dict[EClassId, ENode]]]] = {}
-
-    def _signature(
-        choices: dict[EClassId, ENode],
-    ) -> tuple[tuple[EClassId, ENode], ...]:
-        return tuple(sorted(choices.items(), key=lambda item: item[0]))
-
-    def _try_extract_class(cid: EClassId) -> list[tuple[float, dict[EClassId, ENode]]]:
-        ec = egraph.eclass(cid)
-        candidates: list[tuple[float, dict[EClassId, ENode]]] = []
-        seen: set[tuple[tuple[EClassId, ENode], ...]] = set()
-
-        for nid in ec.nodes:
-            if nid in blacklist:
-                continue
-            enode = egraph.enode(nid)
-            child_lists = []
-            extractable = True
-            for child in enode.children:
-                child_cid = egraph.find(child)
-                child_candidates = best.get(child_cid)
-                if not child_candidates:
-                    extractable = False
-                    break
-                child_lists.append(child_candidates)
-            if not extractable:
-                continue
-
-            # Limit combinations to avoid exponential blowup.
-            if not child_lists:
-                all_combos: list[tuple] = [()]
-            else:
-                all_combos = []
-                base = tuple(cl[0] for cl in child_lists)
-                all_combos.append(base)
-                for ci, cl in enumerate(child_lists):
-                    for alt in cl[1:k]:
-                        variant = list(base)
-                        variant[ci] = alt
-                        all_combos.append(tuple(variant))
-            for combo in all_combos:
-                ec_data = egraph.eclass(cid).data
-                child_shapes = [
-                    egraph.eclass(egraph.find(c)).data.shape
-                    for c in enode.children
-                ]
-                # Use node-local cost for ranking.  Adding full subtree
-                # costs causes double-counting when children share
-                # sub-DAGs, which inflates decomposed alternatives and
-                # defeats legality-driven extraction.
-                node_cost = cost_model.node_cost(
-                    enode,
-                    output_shape=ec_data.shape,
-                    input_shapes=child_shapes,
-                )
-                choices: dict[EClassId, ENode] = {}
-                conflict = False
-                for _child_cost, child_choices in combo:
-                    for child_choice_cid, child_choice_enode in child_choices.items():
-                        existing = choices.get(child_choice_cid)
-                        if existing is not None and existing != child_choice_enode:
-                            conflict = True
-                            break
-                        choices[child_choice_cid] = child_choice_enode
-                    if conflict:
-                        break
-                if conflict:
-                    continue
-                choices[cid] = enode
-                sig = _signature(choices)
-                if sig in seen:
-                    continue
-                seen.add(sig)
-                candidates.append((node_cost, choices))
-
-        candidates.sort(key=lambda item: item[0])
-        return candidates[:k]
+    best: dict[EClassId, list[_Candidate]] = {}
 
     # Iterative fixpoint: keep resolving e-classes whose children are ready
     # until no more progress is made.  This handles cycles correctly —
@@ -157,7 +83,14 @@ def extract_topk(
         for cid in reachable:
             if cid in best:
                 continue
-            candidates = _try_extract_class(cid)
+            candidates = _try_extract_class(
+                egraph=egraph,
+                cid=cid,
+                cost_model=cost_model,
+                blacklist=blacklist,
+                k=k,
+                best=best,
+            )
             if candidates:
                 best[cid] = candidates
                 changed = True
@@ -167,10 +100,125 @@ def extract_topk(
         raise ValueError("cannot extract: root e-class has no candidates")
     return [
         ExtractedProgram(
-            cost=cost, ir=_build_ir_from_choices(egraph, best, choices, root)
+            cost=cost, ir=_build_ir_from_choices(egraph, choices, root)
         )
         for cost, choices in best[root][:k]
     ]
+
+
+def _try_extract_class(
+    egraph: EGraph,
+    cid: EClassId,
+    cost_model: CostModel,
+    blacklist: set[int],
+    k: int,
+    best: dict[EClassId, list[_Candidate]],
+) -> list[_Candidate]:
+    ec = egraph.eclass(cid)
+    candidates: list[_Candidate] = []
+    seen: set[tuple[tuple[EClassId, ENode], ...]] = set()
+
+    for nid in ec.nodes:
+        if nid in blacklist:
+            continue
+
+        enode = egraph.enode(nid)
+        child_lists = _child_candidate_lists(egraph, enode, best)
+        if child_lists is None:
+            continue
+
+        for combo in _candidate_combinations(child_lists, k):
+            choices = _merge_child_choices(combo)
+            if choices is None:
+                continue
+
+            choices[cid] = enode
+            sig = _choice_signature(choices)
+            if sig in seen:
+                continue
+
+            seen.add(sig)
+            candidates.append((
+                _node_cost(egraph, cid, enode, cost_model),
+                choices,
+            ))
+
+    candidates.sort(key=lambda item: item[0])
+    return candidates[:k]
+
+
+def _child_candidate_lists(
+    egraph: EGraph,
+    enode: ENode,
+    best: dict[EClassId, list[_Candidate]],
+) -> list[list[_Candidate]] | None:
+    child_lists: list[list[_Candidate]] = []
+    for child in enode.children:
+        child_cid = egraph.find(child)
+        child_candidates = best.get(child_cid)
+        if not child_candidates:
+            return None
+        child_lists.append(child_candidates)
+    return child_lists
+
+
+def _candidate_combinations(
+    child_lists: list[list[_Candidate]],
+    k: int,
+) -> list[tuple[_Candidate, ...]]:
+    # Limit combinations to avoid exponential blowup.
+    if not child_lists:
+        return [()]
+
+    combos: list[tuple[_Candidate, ...]] = []
+    base = tuple(child_candidates[0] for child_candidates in child_lists)
+    combos.append(base)
+    for child_index, child_candidates in enumerate(child_lists):
+        for alt in child_candidates[1:k]:
+            variant = list(base)
+            variant[child_index] = alt
+            combos.append(tuple(variant))
+    return combos
+
+
+def _merge_child_choices(
+    combo: tuple[_Candidate, ...],
+) -> dict[EClassId, ENode] | None:
+    choices: dict[EClassId, ENode] = {}
+    for _child_cost, child_choices in combo:
+        for child_choice_cid, child_choice_enode in child_choices.items():
+            existing = choices.get(child_choice_cid)
+            if existing is not None and existing != child_choice_enode:
+                return None
+            choices[child_choice_cid] = child_choice_enode
+    return choices
+
+
+def _node_cost(
+    egraph: EGraph,
+    cid: EClassId,
+    enode: ENode,
+    cost_model: CostModel,
+) -> float:
+    ec_data = egraph.eclass(cid).data
+    child_shapes = [
+        egraph.eclass(egraph.find(child)).data.shape
+        for child in enode.children
+    ]
+    # Use node-local cost for ranking.  Adding full subtree costs causes
+    # double-counting when children share sub-DAGs, which inflates decomposed
+    # alternatives and defeats legality-driven extraction.
+    return cost_model.node_cost(
+        enode,
+        output_shape=ec_data.shape,
+        input_shapes=child_shapes,
+    )
+
+
+def _choice_signature(
+    choices: dict[EClassId, ENode],
+) -> tuple[tuple[EClassId, ENode], ...]:
+    return tuple(sorted(choices.items(), key=lambda item: item[0]))
 
 
 def _reachable_eclasses(egraph: EGraph, root_cid: EClassId) -> list[EClassId]:
@@ -194,7 +242,6 @@ def _reachable_eclasses(egraph: EGraph, root_cid: EClassId) -> list[EClassId]:
 
 def _build_ir_from_choices(
     egraph: EGraph,
-    best: dict[EClassId, list[tuple[float, dict[EClassId, ENode]]]],
     choices: dict[EClassId, ENode],
     root_cid: EClassId,
 ) -> IRGraph:
@@ -204,47 +251,57 @@ def _build_ir_from_choices(
     """
 
     ir = IRGraph()
-
-    def _node_id(cid: EClassId) -> str:
-        ec = egraph.eclass(cid)
-        if ec.data.preferred_name:
-            return ec.data.preferred_name
-        return f"_e{cid}"
-
     cid_to_node_id: dict[EClassId, str] = {}
-
-    def _build(cid: EClassId) -> str:
-        cid = egraph.find(cid)
-        if cid in cid_to_node_id:
-            return cid_to_node_id[cid]
-        if cid not in choices:
-            raise ValueError(
-                f"cannot build e-class {cid}: not in extraction choices"
-            )
-        enode = choices[cid]
-
-        # Build children first (handles arbitrary ordering).
-        child_ids: list[str] = []
-        for child in enode.children:
-            child_ids.append(_build(egraph.find(child)))
-
-        nid = _node_id(cid)
-        if nid in ir.nodes:
-            nid = f"{nid}__e{cid}"
-        ec = egraph.eclass(cid)
-        ir.add_node(
-            IRNode(
-                id=nid,
-                op=enode.op,
-                inputs=tuple(child_ids),
-                attrs=enode.attrs,
-                shape=ec.data.shape,
-                dtype=ec.data.dtype,
-            )
-        )
-        cid_to_node_id[cid] = nid
-        return nid
-
-    _build(root_cid)
+    _build_node_from_choices(egraph, choices, ir, cid_to_node_id, root_cid)
     ir.root = cid_to_node_id[egraph.find(root_cid)]
     return ir
+
+
+def _build_node_from_choices(
+    egraph: EGraph,
+    choices: dict[EClassId, ENode],
+    ir: IRGraph,
+    cid_to_node_id: dict[EClassId, str],
+    cid: EClassId,
+) -> str:
+    cid = egraph.find(cid)
+    if cid in cid_to_node_id:
+        return cid_to_node_id[cid]
+    if cid not in choices:
+        raise ValueError(
+            f"cannot build e-class {cid}: not in extraction choices"
+        )
+    enode = choices[cid]
+
+    # Build children first (handles arbitrary ordering).
+    child_ids: list[str] = []
+    for child in enode.children:
+        child_ids.append(
+            _build_node_from_choices(
+                egraph, choices, ir, cid_to_node_id, egraph.find(child),
+            )
+        )
+
+    nid = _node_id(egraph, cid)
+    if nid in ir.nodes:
+        nid = f"{nid}__e{cid}"
+    ec = egraph.eclass(cid)
+    ir.add_node(
+        IRNode(
+            id=nid,
+            op=enode.op,
+            inputs=tuple(child_ids),
+            attrs=enode.attrs,
+            shape=ec.data.shape,
+            dtype=ec.data.dtype,
+        )
+    )
+    cid_to_node_id[cid] = nid
+    return nid
+
+
+def _node_id(egraph: EGraph, cid: EClassId) -> str:
+    ec = egraph.eclass(cid)
+    if ec.data.preferred_name:
+        return ec.data.preferred_name
+    return f"_e{cid}"
