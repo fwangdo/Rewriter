@@ -4,7 +4,6 @@ ONNX → pre-passes → IR → e-graph saturation → greedy extraction → ONNX
 """
 
 from __future__ import annotations
-from typing     import List
 
 import sys
 sys.setrecursionlimit(10**7)
@@ -27,11 +26,7 @@ from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
-# rules.
-from src.common.rules.arithmetic import get_arithmetic_specs
-from src.common.rules.fusion import get_fusion_specs
-from src.common.rules.layout import get_layout_specs
-from src.common.rules.legalization import RuleSpec, get_legalization_specs
+from src.common.rules import get_all_specs
 
 #.. 
 import sys 
@@ -172,12 +167,7 @@ def _run_egraph_saturation(
     stats = ExploreStats()
     blacklist: set[int] = set()
 
-    all_rules: List[RuleSpec] = (
-        get_legalization_specs()
-        + get_arithmetic_specs()
-        + get_layout_specs()
-        + get_fusion_specs()
-    )
+    all_rules = get_all_specs()
 
     if all_rules and max_iter > 0:
         stats, blacklist = explore(

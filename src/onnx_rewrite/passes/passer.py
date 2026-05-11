@@ -2,63 +2,24 @@ from __future__ import annotations
 
 import onnx
 
-from src.common.rules.arithmetic import get_arithmetic_specs
-from src.common.rules.fusion import get_fusion_specs
-from src.common.rules.layout import get_layout_specs
-from src.common.rules.legalization import get_legalization_specs
+from src.common.rules import get_all_specs
 
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
-from .convert_matmul import ConvertMatmul
-from .eliminate_id import EliminateId
 from .rule_runner import RuleRunner
-from .rewrite_bn import RewriteBN
-from .rewrite_clip import RewriteClip
-from .rewrite_compare import RewriteCompare
-from .rewrite_decoder_mask import RewriteDecoderMask
-from .rewrite_gather import RewriteGather
-from .rewrite_gemm import RewriteGemm
-from .rewrite_layernorm import RewriteLayerNorm
-from .rewrite_meta_reshape import RewriteMetaReshape
-from .rewrite_neg import RewriteNeg
-from .rewrite_pow import RewritePow
-from .rewrite_range import RewriteRange
-from .rewrite_reshape_shape import RewriteReshapeShape
-from .rewrite_scatternd import RewriteScatterND
-from .rewrite_trilu import RewriteTrilu
-from .rewrite_where_mask import RewriteWhereMask
 
 
 class Passer:
     """Run the frontend rewrite pipeline in a fixed order."""
 
     def __init__(self) -> None:
+        specs = get_all_specs()
+        assert [s.name for s in specs] == [s.name for s in get_all_specs()], \
+            "baseline and superopt rule sets diverged"
         self.passes = [
             ConstantFolding(),
-            RewriteGather(),
             ConstantFolding(),
-            EliminateId(),
-            RuleRunner(
-                get_legalization_specs()
-                + get_arithmetic_specs()
-                + get_layout_specs()
-                + get_fusion_specs()
-            ),
-            RewriteClip(),
-            RewriteCompare(),
-            RewriteMetaReshape(),
-            RewriteReshapeShape(),
-            RewriteLayerNorm(),
-            RewritePow(),
-            RewriteBN(),
-            RewriteNeg(),
-            RewriteRange(),
-            RewriteGemm(),
-            ConvertMatmul(),
-            RewriteDecoderMask(),
-            RewriteWhereMask(),
-            RewriteTrilu(),
-            RewriteScatterND(),
+            RuleRunner(specs),
             ConstantFolding(),
             Cleanup(),
         ]

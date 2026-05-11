@@ -1,11 +1,13 @@
 """Internal IR node for e-graph representation.
 
-Tensat represents each operator as a node whose value is the output tensor.
-We follow the same convention: one IRNode = one output tensor.
+The IR is value-oriented: an ordinary IRNode represents one tensor value
+and the operation that produces it. For example, ``IRNode(id="z", op="Add",
+inputs=("x", "y"))`` means tensor value ``z`` is produced by ``Add(x, y)``.
 
-Multi-output ONNX ops (e.g. Split) are decomposed into a base node
-plus projection nodes (split_0, split_1, ...) so every IRNode has
-exactly one output.
+Multi-output ONNX ops are the exception. They are represented as one base
+operation node plus one ``proj`` node per output value. The base node is an
+operation invocation handle; the ``proj`` nodes are the tensor values that
+downstream IR nodes consume.
 """
 
 from __future__ import annotations
@@ -16,10 +18,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class IRNode:
-    """A single operation in the IR graph.
+    """A value node in the IR graph.
 
-    Each node produces exactly one output tensor.
-    ``inputs`` are references to other nodes' output ids.
+    For ordinary ops, ``id`` is the produced tensor value name and ``op`` is
+    the producer operation. ``inputs`` are references to other value ids.
     """
 
     id: str

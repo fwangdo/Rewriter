@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 from .graph import IRGraph
 from .node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
-import sys 
 
 _MULTI_OUTPUTS_ATTR = "__outputs"
 _INPUT_SLOTS_ATTR = "__input_slots"
@@ -29,6 +28,10 @@ _NODE_NAME_ATTR = "__node_name"
 
 def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     """Convert an ONNX model to an IRGraph.
+
+    The IR is value-oriented: ordinary ONNX nodes become IR nodes whose id is
+    the output tensor value. Multi-output ONNX nodes become a base operation
+    node plus one OP_PROJ node per output value.
 
     Steps:
     1. Run shape inference.
@@ -79,7 +82,10 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
         attrs = _extract_attrs(node)
         if node.name:
             attrs[_NODE_NAME_ATTR] = node.name
-        if any(input_name == "" for input_name in node.input): # "" means optional. 
+        if any(input_name == "" for input_name in node.input):
+            # ONNX uses "" to preserve omitted optional input positions.
+            # IRNode.inputs stores only real value ids, so keep the original
+            # slots in attrs for exact ONNX reconstruction.
             attrs[_INPUT_SLOTS_ATTR] = tuple(node.input)
         live_outputs = tuple(output for output in node.output if output)
 
@@ -97,7 +103,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
                 attrs=tuple(sorted(base_attrs.items())),
             ))
 
-            # One tensor should be represented by one node.
+            # The base node represents the ONNX operation invocation. Each
+            # OP_PROJ node below represents one concrete output tensor value.
             for output_index, output_id in enumerate(live_outputs):
                 ir.add_node(IRNode(
                     id=output_id,
@@ -208,6 +215,9 @@ def _resolve_node_inputs(
     if input_slots is None:
         return resolved
 
+    # ``resolved`` is compact because IRNode.inputs omits optional ONNX slots
+    # encoded as "". Walk the original slot list and consume one real input
+    # each time the slot was present.
     resolved_iter = iter(resolved)
     restored: list[str] = []
     for slot in input_slots:
@@ -253,6 +263,7 @@ def _live_value_info(
     graph_outputs: list[onnx.ValueInfoProto],
     initializers: list[TensorProto],
 ) -> list[onnx.ValueInfoProto]:
+    # Get all names in rewritten graph.  
     live_value_names = set()
     for node in nodes:
         live_value_names.update(node.input)
@@ -260,6 +271,7 @@ def _live_value_info(
     live_value_names.update(init.name for init in initializers)
     live_value_names.update(inp.name for inp in graph_inputs)
     live_value_names.update(out.name for out in graph_outputs)
+
     return [
         vi for vi in ref_graph.value_info
         if vi.name in live_value_names
@@ -270,6 +282,7 @@ def _make_model_like_ref(
     graph_def: onnx.GraphProto,
     ref_model: onnx.ModelProto,
 ) -> onnx.ModelProto:
+    # To unify model version. 
     model = onnx.helper.make_model(graph_def)
     model.ir_version = ref_model.ir_version
     del model.opset_import[:]
@@ -299,6 +312,7 @@ def _attrs_to_kwargs(attrs: dict[str, Any]) -> dict[str, Any]:
         if key.startswith("__"):
             continue
         if isinstance(val, np.ndarray):
+            # from_array: np.array -> onnx.TensorProto
             kwargs[key] = numpy_helper.from_array(val)
         elif _is_hashable_ndarray(val):
             # Reconstruct numpy array from hashable form (dtype_str, shape, bytes).
