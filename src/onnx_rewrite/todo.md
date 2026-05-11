@@ -97,6 +97,16 @@ baseline에서 모든 rule을 무조건 fixpoint로 반복하면 안 된다.
 목표는 "baseline이 멍청해서 superopt가 이긴다"를 피하고,
 e-graph의 실제 장점인 multi-path exploration / extraction만 비교에 남기는 것이다.
 
+엄밀히 보면 e-graph superopt의 진짜 경쟁 모델은 단순 수동 ordering이 아니라
+enumerative search 또는 cost-guided local search다. 예를 들어 가능한 rewrite 후보를
+한 번씩 만들어보고, graph cost를 가장 크게 낮추는 후보를 선택하며, 더 이상 strict
+cost improvement가 없을 때 종료하는 방식이다.
+
+다만 현 단계의 현실적인 비교 기준은 강한 수동 ordering baseline이다. 즉 baseline은
+시니어 엔지니어가 넣었을 법한 terminating rewrite 순서와 cleanup loop를 갖추되,
+전체 후보 graph를 열거하는 별도 search engine까지 구현하지는 않는다. 추후 baseline이
+너무 약하다는 증거가 남으면 cost-guided enumerative baseline을 별도 stage로 검토한다.
+
 ### 2. 평가 baseline도 강해야 한다
 
 수치 하나만 찍는 평가로 끝내지 않는다. 최소 검증 축은 아래 세 가지다.
@@ -144,6 +154,11 @@ TODO:
 [ ] `yolo26_nano`에서 baseline 잔여 `Neg`가 제거되는지 확인한다.
 [ ] `Unsqueeze/Squeeze -> Reshape`의 dynamic shape 정책을 superopt IR과 맞출지 결정한다.
 [ ] 6개 benchmark에 대해 baseline vs superopt 표를 재생성한다.
+
+Non-goal for now:
+
+[ ] 모든 rewrite 후보 graph를 나열하고 cost 감소폭으로 선택하는 enumerative baseline은
+    당장 구현하지 않는다. 필요해지면 별도 stage로 분리한다.
 
 ### 1.1 Core lowering / decomposition
 
