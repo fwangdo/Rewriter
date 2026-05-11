@@ -29,13 +29,14 @@ class AnalysisData:
     def join(a: AnalysisData, b: AnalysisData) -> AnalysisData:
         """Merge analysis data when two e-classes are merged.
 
-        Shapes must be compatible (equal or one is None).
+        When both shapes are known but differ (e.g. broadcasting via
+        arithmetic rewrites + congruence closure), fall back to None
+        so that extraction treats the shape as unknown.
         """
-        shape = a.shape if a.shape is not None else b.shape
         if a.shape is not None and b.shape is not None and a.shape != b.shape:
-            raise ValueError(
-                f"shape conflict during e-class merge: {a.shape} vs {b.shape}"
-            )
+            shape = None
+        else:
+            shape = a.shape if a.shape is not None else b.shape
         dtype = a.dtype if a.dtype is not None else b.dtype
         is_constant = a.is_constant or b.is_constant
         preferred_name = (

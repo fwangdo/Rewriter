@@ -29,7 +29,7 @@ def apply_rule(
     Returns the merged e-class id, or None if check failed or shapes
     are incompatible.
     """
-    if not _check_vars(egraph, rule.checks, subst):
+    if not check_vars(egraph, rule.checks, subst):
         return None
 
     builder = EGraphBuilder(egraph, match_cid, subst)
@@ -44,7 +44,7 @@ def apply_rule(
     return egraph.merge(match_cid, target_cid)
 
 
-def _check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> bool:
+def check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> bool:
     """Evaluate VarCheck guards against the e-graph."""
     for check in checks:
         cid = subst.get(check.var)

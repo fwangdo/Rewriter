@@ -160,25 +160,6 @@ def _child_lists(
     return child_lists
 
 
-# def _candidate_combinations(
-#     child_lists: list[list[_Candidate]],
-#     k: int,
-# ) -> list[tuple[_Candidate, ...]]:
-#     # Limit combinations to avoid exponential blowup.
-#     if not child_lists:
-#         return [()]
-
-#     combos: list[tuple[_Candidate, ...]] = []
-#     base = tuple(child_candidates[0] for child_candidates in child_lists)
-#     combos.append(base)
-#     for child_index, child_candidates in enumerate(child_lists):
-#         for alt in child_candidates[1:k]:
-#             variant = list(base)
-#             variant[child_index] = alt
-#             combos.append(tuple(variant))
-#     return combos
-
-
 def _merge_child_lists(
     child_lists: list[_Candidate], 
 ) -> dict[EClassId, ENode] | None: 
@@ -212,12 +193,6 @@ def _node_cost(
         output_shape=ec_data.shape,
         input_shapes=child_shapes,
     )
-
-
-# def _choice_signature(
-#     choices: dict[EClassId, ENode],
-# ) -> tuple[tuple[EClassId, ENode], ...]:
-#     return tuple(sorted(choices.items(), key=lambda item: item[0]))
 
 
 def _reachable_eclasses(egraph: EGraph, root_cid: EClassId) -> list[EClassId]:

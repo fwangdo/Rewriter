@@ -9,7 +9,6 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 "$PYTHON_BIN" -m src.superopt.run \
-  -i benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
-  -o artifacts/superopt/mobilenetv2.onnx \
-  --contract vision \
-  -v
+  -i benchmarks/onnx/nlp/pythia_70m/onnx/model.onnx \
+  -o artifacts/superopt/pythia_70m.onnx \
+  --contract vision

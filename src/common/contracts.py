@@ -77,6 +77,7 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Sub",
         "Tanh",
         "Transpose",
+        "Trilu",
         "Unsqueeze",
     }
 )

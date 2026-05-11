@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import time
 from collections import Counter
@@ -24,6 +25,19 @@ DOMAIN_OPS = {
     "nlp": "LLM_SUPPORTED_OPS",
     "vision": "VISION_SUPPORTED_OPS",
 }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run benchmark models through baseline, superopt, or both.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=("baseline", "superopt", "comp"),
+        default="comp",
+        help="Run only baseline, only superopt, or both for comparison.",
+    )
+    return parser.parse_args()
 
 
 def get_supported_ops(domain: str):
@@ -86,6 +100,7 @@ def run_superopt(model_path: str, output_path: str, domain: str,
 
 
 def main():
+    args = parse_args()
     root = Path(__file__).resolve().parent.parent.parent
     results = []
 
@@ -102,33 +117,37 @@ def main():
         print(f"  {domain}/{name}  (max_iter={max_iter}, max_nodes={max_nodes})")
         print(f"{'='*60}")
 
-        print("  [baseline] running...")
-        try:
-            bl = run_baseline(str(model_path), domain)
-            print(f"  [baseline] {bl['total_ops']} ops, {bl['illegal_count']} illegal, {bl['time_s']}s")
-        except Exception as e:
-            print(f"  [baseline] FAILED: {e}")
-            bl = None
+        bl = None
+        if args.mode in ("baseline", "comp"):
+            print("  [baseline] running...")
+            try:
+                bl = run_baseline(str(model_path), domain)
+                print(f"  [baseline] {bl['total_ops']} ops, {bl['illegal_count']} illegal, {bl['time_s']}s")
+            except Exception as e:
+                print(f"  [baseline] FAILED: {e}")
 
-        print("  [superopt] running...")
-        try:
-            so = run_superopt(str(model_path), str(output_path), domain,
-                              max_iter=max_iter, max_nodes=max_nodes)
-            print(f"  [superopt] {so['total_ops']} ops, {so['illegal_count']} illegal, {so['time_s']}s")
-        except Exception as e:
-            print(f"  [superopt] FAILED: {e}")
-            so = None
+        so = None
+        if args.mode in ("superopt", "comp"):
+            print("  [superopt] running...")
+            try:
+                so = run_superopt(str(model_path), str(output_path), domain,
+                                  max_iter=max_iter, max_nodes=max_nodes)
+                print(f"  [superopt] {so['total_ops']} ops, {so['illegal_count']} illegal, {so['time_s']}s")
+            except Exception as e:
+                print(f"  [superopt] FAILED: {e}")
 
         results.append({
             "domain": domain,
             "name": name,
             "contract": DOMAIN_OPS[domain],
+            "mode": args.mode,
             "baseline": bl,
             "superopt": so,
         })
 
     # Dump raw JSON for report generation
-    out_json = root / "artifacts/superopt/bench_results.json"
+    output_name = "bench_results.json" if args.mode == "comp" else f"bench_results_{args.mode}.json"
+    out_json = root / "artifacts/superopt" / output_name
     with open(out_json, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {out_json}")

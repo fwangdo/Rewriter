@@ -248,21 +248,22 @@ class CostModel:
         input_shapes: list[tuple[int, ...] | None] | None = None,
     ) -> float:
         if enode.op in _FREE_OPS:
-            return 0.0
+            return 1.0
 
         if self._supported_ops is not None and enode.op not in self._supported_ops:
             return 1e9  # heavy penalty for unsupported ops
+        else:
+            return 1 
 
-        flops = estimate_flops(enode.op, output_shape, input_shapes, enode.attrs)
-        if flops is not None:
-            # Scale FLOPs to microseconds-like range so it's comparable
-            # with the profiled fallback.  1 GFLOP ≈ 1000 us on a modern
-            # single-core CPU (~1 GFLOPS for non-SIMD scalar work, but
-            # BLAS kernels are much faster).  We use a rough 1 MFLOP = 1 us.
-            return flops / 1e6
-
-        # Fallback: profiled op-type average.
-        return self._table.get(enode.op, self._default)
+        # we do not care about flops now. 
+        # flops = estimate_flops(enode.op, output_shape, input_shapes, enode.attrs)
+        # if flops is not None:
+        #     # Scale FLOPs to microseconds-like range so it's comparable
+        #     # with the profiled fallback.  1 GFLOP ≈ 1000 us on a modern
+        #     # single-core CPU (~1 GFLOPS for non-SIMD scalar work, but
+        #     # BLAS kernels are much faster).  We use a rough 1 MFLOP = 1 us.
+        #     return flops / 1e6
+        # return self._table.get(enode.op, self._default)
 
     def is_legal(self, enode: ENode) -> bool:
         """Check whether an op is legal under the supported-op contract."""

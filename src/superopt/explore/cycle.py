@@ -107,12 +107,24 @@ def remove_cycles(
         cycle = _find_one_cycle(egraph, root_cid, blacklist)
         if cycle is None:
             break
-        # Blacklist the newest node in the cycle (highest nid = added last).
-        # it's heuristic. 
-        newest = max(cycle)
-        blacklist.add(newest)
-    
-    return 
+        # Blacklist the newest node in the cycle (highest nid = added last),
+        # but never blacklist the last live enode of any e-class — doing so
+        # would make that e-class permanently unextractable.
+        blacklisted_one = False
+        for candidate in sorted(cycle, reverse=True):
+            cid = egraph._node_to_class.get(candidate)
+            if cid is not None:
+                cid = egraph.find(cid)
+                live = egraph.eclass(cid).nodes - blacklist - {candidate}
+                if not live:
+                    continue
+            blacklist.add(candidate)
+            blacklisted_one = True
+            break
+        if not blacklisted_one:
+            break
+
+    return
 
 
 def _find_one_cycle(

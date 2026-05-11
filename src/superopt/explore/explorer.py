@@ -77,6 +77,8 @@ def explore(
         desc_map = build_descendant_map(egraph, blacklist)
         applied = 0
         for match in matches:
+            if egraph.num_enodes >= max_nodes:
+                break
             if will_create_cycle(
                 egraph, match.rule, match.eclass_id, match.subst, desc_map
             ):

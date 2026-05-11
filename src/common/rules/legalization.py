@@ -424,12 +424,17 @@ def _build_constantofshape_fold(
     # ConstantOfShape default value comes from the "value" attribute (scalar tensor).
     # In the e-graph, numpy arrays are stored as (dtype_str, shape, bytes) tuples.
     value_attr = builder.get_matched_attr("value")
+    fill_dtype = np.float32
     if value_attr is not None:
         if isinstance(value_attr, np.ndarray):
-            fill_val = float(value_attr.flat[0])
+            fill_array = np.asarray(value_attr)
+            fill_val = fill_array.reshape(-1)[0].item()
+            fill_dtype = fill_array.dtype
         elif isinstance(value_attr, tuple) and len(value_attr) == 3:
             dtype_str, _shape, data = value_attr
-            fill_val = float(np.frombuffer(data, dtype=np.dtype(dtype_str)).flat[0])
+            fill_array = np.frombuffer(data, dtype=np.dtype(dtype_str))
+            fill_val = fill_array.reshape(-1)[0].item()
+            fill_dtype = fill_array.dtype
         else:
             try:
                 fill_val = float(value_attr)
@@ -437,8 +442,12 @@ def _build_constantofshape_fold(
                 return builder.get_match()
     else:
         fill_val = 0.0
-    arr = np.full(target_shape, fill_val, dtype=np.float32)
-    return builder.add_array(arr, f"__constshape_{target_shape}_{fill_val}")
+    arr = np.full(target_shape, fill_val, dtype=fill_dtype)
+    return builder.add_array(
+        arr,
+        f"__constshape_{target_shape}_{fill_val}",
+        dtype_code=_onnx_dtype_code(arr.dtype),
+    )
 
 
 def _build_flatten_to_reshape(
@@ -530,10 +539,10 @@ def _build_equal_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     if a_data is None or b_data is None:
         return builder.get_match()
     try:
-        result = (a_data == b_data).astype(np.float32)
+        result = a_data == b_data
     except (ValueError, TypeError):
         return builder.get_match()
-    return builder.add_array(result, f"__equal_folded_{id(result)}")
+    return builder.add_array(result, f"__equal_folded_{id(result)}", dtype_code=9)
 
 
 def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -543,10 +552,10 @@ def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     if a_data is None or b_data is None:
         return builder.get_match()
     try:
-        result = (a_data < b_data).astype(np.float32)
+        result = a_data < b_data
     except (ValueError, TypeError):
         return builder.get_match()
-    return builder.add_array(result, f"__less_folded_{id(result)}")
+    return builder.add_array(result, f"__less_folded_{id(result)}", dtype_code=9)
 
 
 def _build_not_to_sub(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -598,3 +607,26 @@ def _get_gemm_attrs(builder: GraphBuilder) -> tuple[int, int, float, float]:
 
 def _is_close(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-6
+
+
+def _onnx_dtype_code(dtype: np.dtype) -> int:
+    dtype = np.dtype(dtype)
+    if dtype == np.dtype("float32"):
+        return 1
+    if dtype == np.dtype("uint8"):
+        return 2
+    if dtype == np.dtype("int8"):
+        return 3
+    if dtype == np.dtype("uint16"):
+        return 4
+    if dtype == np.dtype("int16"):
+        return 5
+    if dtype == np.dtype("int32"):
+        return 6
+    if dtype == np.dtype("int64"):
+        return 7
+    if dtype == np.dtype("bool"):
+        return 9
+    if dtype == np.dtype("float64"):
+        return 11
+    return 1

@@ -24,6 +24,7 @@ from .compat import run_post_passes, run_pre_passes
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+from .rules.base import check_vars
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,7 @@ def rewrite_ir_manual(ir: IRGraph) -> list[str]:
         spec = specs_by_name.get(rule_name)
         if spec is None:
             raise KeyError(f"unknown manual baseline rule: {rule_name}")
+
         applied = _apply_rule_once(ir, spec)
         if applied:
             _prune_dead_ir(ir)
@@ -137,9 +139,11 @@ def _apply_rule_once(ir: IRGraph, spec: RuleSpec) -> int:
         if node is None or node.op in _BOUNDARY_OPS:
             continue
 
-        match = _match_node(ir, node_id, spec.source)
+        # it's okay, spec has PatternNode. 
+        match = _match_node(ir, node_id, spec.source) # type: ignore  
         if match is None:
             continue
+
         subst, _matched_ids = match
         if not _passes_checks(ir, spec.checks, subst):
             continue
@@ -248,9 +252,11 @@ def _replace_value(ir: IRGraph, old: str, new: str) -> None:
             dtype=node.dtype,
         )
     ir.outputs = tuple(new if value_id == old else value_id for value_id in ir.outputs)
+    return 
 
 
 def _prune_dead_ir(ir: IRGraph) -> None:
+    # def-use chain. 
     roots = [ir.root] if ir.root is not None else list(ir.output_ids())
     reachable: set[str] = set()
 
@@ -279,6 +285,7 @@ def _prune_dead_ir(ir: IRGraph) -> None:
         for name, value in ir.initializers.items()
         if name in used_initializers
     }
+    return 
 
 
 class IRRewriteBuilder:

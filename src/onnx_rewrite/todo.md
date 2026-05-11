@@ -157,8 +157,26 @@ TODO:
 [x] fixpoint는 쓰지 않고, 필요한 cleanup은 manual rule order에 명시한다.
 [x] `add_comm`, `mul_comm`, associativity, exploratory fusion rule은 manual baseline에서 제외한다.
 [x] `yolo26_nano` sanity에서 baseline 잔여 `Neg`가 제거되는지 확인한다.
+[x] baseline CLI와 `test_baseline.sh`를 추가한다.
+[x] 기존 `test.sh`를 `test_superopt.sh`로 분리한다.
+[x] `bench_all.py --mode {baseline,superopt,comp}`를 추가한다.
+[x] `tinyllama_15m` baseline/superopt shape inference failure를 수정한다.
+    - 원인: `ConstantOfShape` fold가 `value` attr dtype을 보존하지 않아 int64 fill이 float32로 생성되고,
+      이후 constant folding에서 float64 initializer가 생기면서 기존 float value_info와 충돌했다.
+    - 조치: `ConstantOfShape` fold는 fill dtype을 보존하고, `Equal/Less` fold는 bool tensor로 생성한다.
 [ ] `Unsqueeze/Squeeze -> Reshape`의 dynamic shape 정책을 superopt IR과 맞출지 결정한다.
+[ ] folded numpy dtype -> ONNX TensorProto dtype mapping을 공용 유틸로 중앙화한다.
+[ ] `ConstantOfShape` dtype 보존과 `Equal/Less` bool fold에 대한 regression test를 추가한다.
+[ ] superopt verbose 실행에서 root DEBUG match 로그가 과도하게 출력되는 문제를 정리한다.
 [ ] 6개 benchmark에 대해 baseline vs superopt 표를 재생성한다.
+
+실행 방법:
+
+- 단일 baseline sanity: `src/superopt/test_baseline.sh`
+- 단일 superopt sanity: `src/superopt/test_superopt.sh`
+- 전체 baseline만: `.venv/bin/python -m src.superopt.bench_all --mode baseline`
+- 전체 superopt만: `.venv/bin/python -m src.superopt.bench_all --mode superopt`
+- baseline/superopt 비교: `.venv/bin/python -m src.superopt.bench_all --mode comp`
 
 Non-goal for now:
 
