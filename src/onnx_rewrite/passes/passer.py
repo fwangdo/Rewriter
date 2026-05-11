@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import onnx
 
-from src.common.rules import get_legalization_specs
+from src.common.rules.arithmetic import get_arithmetic_specs
+from src.common.rules.fusion import get_fusion_specs
+from src.common.rules.layout import get_layout_specs
+from src.common.rules.legalization import get_legalization_specs
 
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
@@ -35,7 +38,12 @@ class Passer:
             RewriteGather(),
             ConstantFolding(),
             EliminateId(),
-            RuleRunner(get_legalization_specs()),
+            RuleRunner(
+                get_legalization_specs()
+                + get_arithmetic_specs()
+                + get_layout_specs()
+                + get_fusion_specs()
+            ),
             RewriteClip(),
             RewriteCompare(),
             RewriteMetaReshape(),

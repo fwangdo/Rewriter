@@ -65,11 +65,16 @@ class ConvertMatmul(Folder):
         result_ndim = max(ndim_a + 1, ndim_b + 1)
         k_axis = result_ndim - 2
 
-        axes_name = self.tensor_name(prefix, "reduce_axes")
-        self.add_init(graph, axes_name, np.array([k_axis], dtype=np.int64))
         mean_out = self.tensor_name(prefix, "mean")
-        nodes.append(helper.make_node(cons.OP_REDUCE_MEAN, [mul_out, axes_name], [mean_out],
-                                      name=self.node_name(prefix, "reduce_mean"), keepdims=0))
+        opset = next((o.version for o in self.model.opset_import if o.domain == ""), 1)
+        if opset >= 18:
+            axes_name = self.tensor_name(prefix, "reduce_axes")
+            self.add_init(graph, axes_name, np.array([k_axis], dtype=np.int64))
+            nodes.append(helper.make_node(cons.OP_REDUCE_MEAN, [mul_out, axes_name], [mean_out],
+                                          name=self.node_name(prefix, "reduce_mean"), keepdims=0))
+        else:
+            nodes.append(helper.make_node(cons.OP_REDUCE_MEAN, [mul_out], [mean_out],
+                                          name=self.node_name(prefix, "reduce_mean"), axes=[k_axis], keepdims=0))
 
         # Mul by K to get sum
         k_name = self.tensor_name(prefix, "k_const")

@@ -87,6 +87,7 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
             base_id = node.name or f"{node.op_type}_{node_index}__multi"
             if base_id in ir.nodes:
                 raise Exception(f'[ERROR]: {base_id} already exists.')
+
             base_attrs = dict(attrs)
             base_attrs[_MULTI_OUTPUTS_ATTR] = live_outputs
             ir.add_node(IRNode(
@@ -95,6 +96,8 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
                 inputs=tuple(input_name for input_name in node.input if input_name),
                 attrs=tuple(sorted(base_attrs.items())),
             ))
+
+            # One tensor should be represented by one node.
             for output_index, output_id in enumerate(live_outputs):
                 ir.add_node(IRNode(
                     id=output_id,
@@ -137,6 +140,7 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     graph_inputs = _graph_inputs_for_ir(ir, ref_graph)
     graph_outputs = _graph_outputs_for_ir(ir, ref_graph)
     initializers = _build_initializers(ir)
+
     nodes = _build_onnx_nodes(ir)
     value_info = _live_value_info(
         ref_graph,
@@ -185,6 +189,8 @@ def _build_proj_remap(ir: IRGraph) -> dict[str, str]:
     return proj_remap
 
 
+# --- translation from ir graph to onnx. 
+
 def _resolve_inputs(
     inputs: tuple[str, ...],
     proj_remap: dict[str, str],
@@ -214,6 +220,7 @@ def _resolve_node_inputs(
 
 def _build_onnx_nodes(ir: IRGraph) -> list[onnx.NodeProto]:
     proj_remap = _build_proj_remap(ir)
+
     # Build nodes in topological order, skipping leaf/noop/proj ops.
     nodes: list[onnx.NodeProto] = []
     for nid in ir.topo_order():
@@ -221,10 +228,12 @@ def _build_onnx_nodes(ir: IRGraph) -> list[onnx.NodeProto]:
         if node.op in (OP_INPUT, OP_WEIGHT, OP_NOOP, OP_PROJ):
             continue
         attrs = dict(node.attrs_dict)
-        outputs = [node.id]
         node_name = attrs.pop(_NODE_NAME_ATTR, "")
         if _MULTI_OUTPUTS_ATTR in attrs:
             outputs = list(attrs.pop(_MULTI_OUTPUTS_ATTR))
+        else: 
+            outputs = [node.id]
+
         inputs = _resolve_node_inputs(node, attrs, proj_remap)
         onnx_node = onnx.helper.make_node(
             node.op,
@@ -357,6 +366,7 @@ def _graph_inputs_for_ir(
     input_names = ir.inputs if ir.inputs else tuple(
         nid for nid, n in ir.nodes.items() if n.op == OP_INPUT
     )
+
     inputs: list[onnx.ValueInfoProto] = []
     for name in input_names:
         if name not in ir.nodes or ir.nodes[name].op != OP_INPUT:
