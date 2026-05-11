@@ -21,7 +21,7 @@ from .egraph.egraph import EGraph
 from .egraph.enode import EClassId, ENode
 from .explore.explorer import explore, ExploreStats
 from .extract.cost import CostModel
-from .extract.greedy import extract_greedy
+from .extract.ilp import extract_ilp
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
@@ -211,7 +211,13 @@ def superoptimize(
 
     # 2. Extraction
     cost_model = CostModel(supported_ops=supported_ops)
-    opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
+    opt_ir = extract_ilp(
+        egraph,
+        root_cid,
+        cost_model,
+        blacklist=blacklist,
+        soft_legalization=True,
+    )
 
     # 3. Restoration to onnx. 
     opt_model = _make_output_model(opt_ir, ir, model)

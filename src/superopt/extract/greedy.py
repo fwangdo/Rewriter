@@ -106,7 +106,7 @@ def extract_best(
     cost, choice = best[root]
     return ExtractedProgram(
             cost=cost, ir=_build_ir_from_choices(egraph, choice, root)
-            )
+        )
 
 
 def _try_extract_class(
@@ -133,8 +133,9 @@ def _try_extract_class(
             continue
 
         translated[cid] = enode
+        children_cost = sum([s for s, _ in child_lists ])
         candidates.append((
-            _node_cost(egraph, cid, enode, cost_model),
+            _node_cost(egraph, cid, enode, cost_model) + children_cost,
             translated,
         ))
 
@@ -163,6 +164,7 @@ def _child_lists(
 def _merge_child_lists(
     child_lists: list[_Candidate], 
 ) -> dict[EClassId, ENode] | None: 
+    """Make class -> node mapping."""
     choices: dict[EClassId, ENode] = {}
     for _child_cost, child_choices in child_lists:
         for child_choice_cid, child_choice_enode in child_choices.items():

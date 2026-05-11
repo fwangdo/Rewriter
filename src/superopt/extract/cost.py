@@ -248,7 +248,7 @@ class CostModel:
         input_shapes: list[tuple[int, ...] | None] | None = None,
     ) -> float:
         if enode.op in _FREE_OPS:
-            return 1.0
+            return 0 
 
         if self._supported_ops is not None and enode.op not in self._supported_ops:
             return 1e9  # heavy penalty for unsupported ops

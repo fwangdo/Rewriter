@@ -36,6 +36,8 @@ def extract_ilp(
     egraph: EGraph,
     root_cid: EClassId,
     cost_model: CostModel,
+    blacklist: set[int] | None = None,
+    soft_legalization: bool = False,
 ) -> IRGraph:
     """Extract the globally optimal program via ILP.
 
@@ -43,6 +45,8 @@ def extract_ilp(
     and finds the true minimum-cost DAG.
     """
     root_cid = egraph.find(root_cid)
+    if blacklist is None:
+        blacklist = set()
 
     # 1. DFS from root to collect reachable eclasses.
     reachable: list[EClassId] = []
@@ -61,10 +65,12 @@ def extract_ilp(
     _dfs(root_cid)
 
     # 2. Assign variable indices.
-    # Collect enodes per eclass (as list of ENode).
-    eclass_enodes: dict[EClassId, list[ENode]] = {}
+    # Collect enodes per eclass with their ids. Blacklisting is keyed by
+    # e-node id, so keep the id alongside the payload.
+    eclass_enodes: dict[EClassId, list[tuple[int, ENode]]] = {}
     for cid in reachable:
-        eclass_enodes[cid] = egraph.eclass_nodes(cid)
+        ec = egraph.eclass(cid)
+        eclass_enodes[cid] = [(nid, egraph.enode(nid)) for nid in ec.nodes]
 
     n_classes = len(reachable)
     # t variables: indices [0, n_classes)
@@ -84,7 +90,7 @@ def extract_ilp(
     # 3. Cost vector: 0 for t vars, node_cost for x vars.
     c = np.zeros(n_vars)
     for cid in reachable:
-        for j, enode in enumerate(eclass_enodes[cid]):
+        for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
             ec_data = egraph.eclass(cid).data
             child_shapes = [
                 egraph.eclass(egraph.find(ch)).data.shape
@@ -121,7 +127,7 @@ def extract_ilp(
     ub_data = []
     ub_row = 0
     for cid in reachable:
-        for j, enode in enumerate(eclass_enodes[cid]):
+        for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
             for child in enode.children:
                 child_cid = egraph.find(child)
                 if child_cid not in t_idx:
@@ -149,12 +155,20 @@ def extract_ilp(
     # Root must be active.
     lb[t_idx[root_cid]] = 1.0
 
-    # Fix illegal enodes to 0, unless eclass has no legal enodes (fallback).
+    # Blacklisted enodes are structurally invalid after cycle handling.
+    for cid in reachable:
+        for j, (nid, _enode) in enumerate(eclass_enodes[cid]):
+            if nid in blacklist:
+                ub[x_idx[(cid, j)]] = 0.0
+
+    # In strict mode, fix illegal enodes to 0 unless an e-class has no legal
+    # alternative. In soft mode, leave them selectable and let node_cost's
+    # penalty steer the solver away from them.
     for cid in reachable:
         enodes = eclass_enodes[cid]
-        has_legal = any(cost_model.is_legal(en) for en in enodes)
-        if has_legal:
-            for j, enode in enumerate(enodes):
+        has_legal = any(cost_model.is_legal(en) for _nid, en in enodes)
+        if has_legal and not soft_legalization:
+            for j, (_nid, enode) in enumerate(enodes):
                 if not cost_model.is_legal(enode):
                     ub[x_idx[(cid, j)]] = 0.0
 
@@ -185,47 +199,61 @@ def extract_ilp(
     # 8. Read solution → build IRGraph.
     chosen: dict[EClassId, ENode] = {}
     for cid in reachable:
-        for j, enode in enumerate(eclass_enodes[cid]):
+        for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
             if sol[x_idx[(cid, j)]] == 1:
                 chosen[cid] = enode
                 break
 
     ir = IRGraph()
-
-    def _node_id(cid: EClassId) -> str:
-        ec = egraph.eclass(cid)
-        if ec.data.preferred_name:
-            return ec.data.preferred_name
-        return f"_e{cid}"
-
     cid_to_node_id: dict[EClassId, str] = {}
-    for cid in reachable:
-        if cid not in chosen:
-            continue  # inactive eclass
-        enode = chosen[cid]
-        child_ids: list[str] = []
-        for child in enode.children:
-            child_cid = egraph.find(child)
-            if child_cid not in cid_to_node_id:
-                raise ValueError(
-                    f"cannot build e-class {cid}: child {child_cid} was not built"
-                )
-            child_ids.append(cid_to_node_id[child_cid])
-
-        nid = _node_id(cid)
-        if nid in ir.nodes:
-            nid = f"{nid}__e{cid}"
-        ec = egraph.eclass(cid)
-        ir.add_node(IRNode(
-            id=nid,
-            op=enode.op,
-            inputs=tuple(child_ids),
-            attrs=enode.attrs,
-            shape=ec.data.shape,
-            dtype=ec.data.dtype,
-        ))
-        cid_to_node_id[cid] = nid
-
-    root_id = cid_to_node_id[root_cid]
+    root_id = _build_node_from_choices(egraph, chosen, ir, cid_to_node_id, root_cid)
     ir.root = root_id
     return ir
+
+
+def _build_node_from_choices(
+    egraph: EGraph,
+    choices: dict[EClassId, ENode],
+    ir: IRGraph,
+    cid_to_node_id: dict[EClassId, str],
+    cid: EClassId,
+) -> str:
+    cid = egraph.find(cid)
+    if cid in cid_to_node_id:
+        return cid_to_node_id[cid]
+    if cid not in choices:
+        raise ValueError(f"cannot build e-class {cid}: not selected by ILP")
+
+    enode = choices[cid]
+    child_ids = [
+        _build_node_from_choices(
+            egraph,
+            choices,
+            ir,
+            cid_to_node_id,
+            egraph.find(child),
+        )
+        for child in enode.children
+    ]
+
+    nid = _node_id(egraph, cid)
+    if nid in ir.nodes:
+        nid = f"{nid}__e{cid}"
+    ec = egraph.eclass(cid)
+    ir.add_node(IRNode(
+        id=nid,
+        op=enode.op,
+        inputs=tuple(child_ids),
+        attrs=enode.attrs,
+        shape=ec.data.shape,
+        dtype=ec.data.dtype,
+    ))
+    cid_to_node_id[cid] = nid
+    return nid
+
+
+def _node_id(egraph: EGraph, cid: EClassId) -> str:
+    ec = egraph.eclass(cid)
+    if ec.data.preferred_name:
+        return ec.data.preferred_name
+    return f"_e{cid}"
