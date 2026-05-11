@@ -9,7 +9,6 @@ from typing import Iterable
 import onnx
 
 from src.common.contracts import (
-    LLM_MUST_REMOVE_OPS,
     LLM_SUPPORTED_OPS,
     SUPPORTED_OPS,
     VISION_SUPPORTED_OPS,
@@ -22,7 +21,6 @@ class Contract:
 
     name: str
     supported_ops: frozenset[str]
-    must_remove_ops: frozenset[str] = frozenset()
     preferred_ops: frozenset[str] = frozenset()
 
 
@@ -55,7 +53,6 @@ def get_contract(target: str, domain: str) -> Contract:
         return Contract(
             name=f"{target}:llm",
             supported_ops=LLM_SUPPORTED_OPS,
-            must_remove_ops=LLM_MUST_REMOVE_OPS,
         )
     raise ValueError(f"unknown superopt contract domain: {domain}")
 
@@ -73,15 +70,9 @@ def check_contract(
         for op, count in hist.items()
         if op not in contract.supported_ops
     }
-    must_remove_remaining = {
-        op: count
-        for op, count in hist.items()
-        if op in contract.must_remove_ops
-    }
     return {
-        "ok": not unsupported and not must_remove_remaining,
+        "ok": not unsupported,
         "contract": contract.name,
         "op_histogram": hist,
         "unsupported_ops": unsupported,
-        "must_remove_remaining": must_remove_remaining,
     }

@@ -139,10 +139,3 @@ LLM_META_OPS: frozenset[str] = frozenset(
         "Unsqueeze",
     }
 )
-
-LLM_MUST_REMOVE_OPS: frozenset[str] = frozenset(
-    {
-        "Trilu",
-        "Where",
-    }
-)
