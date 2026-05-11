@@ -15,15 +15,14 @@ from .folder import Folder
 
 
 class RuleRunner(Folder):
-    """Apply backend-agnostic single-node RuleSpec rules to an ONNX graph."""
+    """Apply backend-agnostic RuleSpec rules to an ONNX graph."""
 
     def __init__(self, specs: list[RuleSpec]) -> None:
         super().__init__()
         self.specs = [
             spec
             for spec in specs
-            if _is_single_node_source(spec.source)
-            and spec.build_fn is not None
+            if spec.build_fn is not None
         ]
 
     def run(self, model: onnx.ModelProto) -> tuple[onnx.ModelProto, list[str]]:
@@ -32,12 +31,13 @@ class RuleRunner(Folder):
             if node in self.nodes_to_remove:
                 continue
             for spec in self.specs:
-                subst = self._match_node(node, spec.source)
-                if subst is None:
+                result = self._match_node(node, spec.source)
+                if result is None:
                     continue
+                subst, matched_nodes = result
                 if not self._passes_checks(spec.checks, subst):
                     continue
-                changed = self._apply(node, spec, subst)
+                changed = self._apply(node, spec, subst, matched_nodes)
                 if not changed:
                     continue
                 self.log.append(f"{spec.name}: rewrote {node.name or node.output[0]}")
@@ -51,7 +51,7 @@ class RuleRunner(Folder):
         self,
         node: onnx.NodeProto,
         pattern: PatternNode,
-    ) -> dict[str, str] | None:
+    ) -> tuple[dict[str, str], list[onnx.NodeProto]] | None:
         if node.op_type != pattern.op or len(node.input) != len(pattern.children):
             return None
         if pattern.attrs is not None:
@@ -60,14 +60,29 @@ class RuleRunner(Folder):
                 if node_attrs.get(key) != expected:
                     return None
         subst: dict[str, str] = {}
+        matched_nodes: list[onnx.NodeProto] = [node]
         for child, input_name in zip(pattern.children, node.input):
-            if not isinstance(child, PatternVar):
+            if isinstance(child, PatternVar):
+                prev = subst.get(child.name)
+                if prev is not None and prev != input_name:
+                    return None
+                subst[child.name] = input_name
+            elif isinstance(child, PatternNode):
+                producer = self.get_producer(input_name)
+                if producer is None:
+                    return None
+                child_result = self._match_node(producer, child)
+                if child_result is None:
+                    return None
+                child_subst, child_matched = child_result
+                for var_name, tensor_name in child_subst.items():
+                    if var_name in subst and subst[var_name] != tensor_name:
+                        return None
+                    subst[var_name] = tensor_name
+                matched_nodes.extend(child_matched)
+            else:
                 return None
-            prev = subst.get(child.name)
-            if prev is not None and prev != input_name:
-                return None
-            subst[child.name] = input_name
-        return subst
+        return subst, matched_nodes
 
     def _passes_checks(self, checks: tuple[VarCheck, ...], subst: dict[str, str]) -> bool:
         for check in checks:
@@ -101,14 +116,16 @@ class RuleRunner(Folder):
         node: onnx.NodeProto,
         spec: RuleSpec,
         subst: dict[str, str],
+        matched_nodes: list[onnx.NodeProto],
     ) -> bool:
-        return self._apply_build_fn(node, spec, subst)
+        return self._apply_build_fn(node, spec, subst, matched_nodes)
 
     def _apply_build_fn(
         self,
         node: onnx.NodeProto,
         spec: RuleSpec,
         subst: dict[str, str],
+        matched_nodes: list[onnx.NodeProto],
     ) -> bool:
         if spec.build_fn is None:
             raise ValueError(f"rule '{spec.name}' routed to build_fn path but has no build_fn")
@@ -120,7 +137,10 @@ class RuleRunner(Folder):
             return False
         if final_value != node.output[0]:
             self._replace_value(node.output[0], final_value)
-        self.replace_node(node, builder.nodes)
+        # Mark all matched internal nodes for removal (root + inner nodes).
+        for matched in matched_nodes:
+            self.mark_for_removal(matched)
+        self.append_nodes(builder.nodes)
         return True
 
     def _replace_value(self, old: str, new: str) -> None:
@@ -135,13 +155,6 @@ class RuleRunner(Folder):
 
 def _onnx_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
     return {key: list(value) if isinstance(value, tuple) else value for key, value in attrs.items()}
-
-
-def _is_single_node_source(pattern) -> bool:
-    """Check if the source pattern is a single node with only variable children."""
-    if not isinstance(pattern, PatternNode):
-        return False
-    return all(isinstance(child, PatternVar) for child in pattern.children)
 
 
 class OnnxGraphBuilder(GraphBuilder):
@@ -160,7 +173,7 @@ class OnnxGraphBuilder(GraphBuilder):
         inputs: list[Any],
         attrs: dict[str, Any] | None = None,
     ) -> str:
-        # generate new node and enroll the node in graph builder. 
+        # generate new node and enroll the node in graph builder.
         output_name = self._tensor_name(op.lower())
         self.nodes.append(
             helper.make_node(
