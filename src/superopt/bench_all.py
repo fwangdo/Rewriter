@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -33,18 +32,17 @@ def get_supported_ops(domain: str):
 
 
 def run_baseline(model_path: str, domain: str):
-    """Run baseline onnx_rewrite pipeline, return op counts."""
-    src_dir = str(Path(__file__).resolve().parent.parent)
-    if src_dir not in sys.path:
-        sys.path.insert(0, src_dir)
-    import importlib
-    passer_mod = importlib.import_module("onnx_rewrite.passes.passer")
+    """Run IR-based fair baseline pipeline, return op counts."""
+    from src.superopt.baseline import optimize_ir_baseline
 
-    model = onnx.load(model_path)
     t0 = time.time()
-    model, _ = passer_mod.Passer().optimize(model)
+    model_name = Path(model_path).parent.parent.name
+    output_path = Path("artifacts/superopt") / f"{model_name}_ir_baseline.onnx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    optimize_ir_baseline(model_path, output_path)
     elapsed = time.time() - t0
 
+    model = onnx.load(output_path)
     ops = Counter(n.op_type for n in model.graph.node)
     supported = get_supported_ops(domain)
     illegal = {op: cnt for op, cnt in ops.items() if op not in supported}

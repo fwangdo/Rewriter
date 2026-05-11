@@ -138,26 +138,31 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 
 ### 1.0 Baseline pass scheduling 재정비
 
-현재 `Passer`는 shared `RuleSpec`을 한 번만 destructive scan으로 적용한다.
+기존 ONNX-level `Passer`는 shared `RuleSpec`을 한 번만 destructive scan으로 적용했다.
 이 때문에 `Sub -> Add(Neg)` 이후 새로 생긴 `Neg`가 같은 pass 안에서
-`Neg -> Mul(-1)`로 이어지지 않는 등 superopt 대비 불공정하게 약한 결과가 생긴다.
+`Neg -> Mul(-1)`로 이어지지 않는 등 superopt 대비 불공정하게 약한 결과가 생겼다.
+
+비교 공정성을 위해 baseline도 superopt와 같은 ONNX -> IR -> ONNX 경로를 탄다.
+차이는 rewrite strategy에만 둔다.
+
+- baseline: IR 위에서 manual ordering destructive rewrite
+- superopt: IR -> e-graph saturation/extraction
 
 TODO:
 
-[ ] `RuleSpec`을 terminating / cleanup / exploratory family로 분류한다.
-[ ] terminating + cleanup subset을 반환하는 helper를 만든다.
-[ ] baseline `Passer`에 bounded fixpoint loop를 추가한다.
-[ ] 각 iteration은 `RuleRunner(terminating_specs) -> ConstantFolding` 순서로 돈다.
-[ ] graph signature 또는 node/initializer 변화량으로 수렴 여부를 판단한다.
-[ ] `add_comm`, `mul_comm`, associativity, exploratory fusion rule은 fixpoint 대상에서 제외한다.
-[ ] excluded exploratory rule은 one-shot/manual ordering 적용 여부를 별도 decision으로 남긴다.
-[ ] `yolo26_nano`에서 baseline 잔여 `Neg`가 제거되는지 확인한다.
+[x] IR 기반 fair baseline entrypoint를 추가한다.
+[x] baseline benchmark runner가 ONNX `Passer` 대신 IR baseline을 쓰게 바꾼다.
+[x] shared `RuleSpec`을 IRGraph에 적용하는 manual-order runner를 추가한다.
+[x] IR rewrite builder / matcher / value replacement / DCE를 추가한다.
+[x] fixpoint는 쓰지 않고, 필요한 cleanup은 manual rule order에 명시한다.
+[x] `add_comm`, `mul_comm`, associativity, exploratory fusion rule은 manual baseline에서 제외한다.
+[x] `yolo26_nano` sanity에서 baseline 잔여 `Neg`가 제거되는지 확인한다.
 [ ] `Unsqueeze/Squeeze -> Reshape`의 dynamic shape 정책을 superopt IR과 맞출지 결정한다.
 [ ] 6개 benchmark에 대해 baseline vs superopt 표를 재생성한다.
 
 Non-goal for now:
 
-[ ] 모든 rewrite 후보 graph를 나열하고 cost 감소폭으로 선택하는 enumerative baseline은
+[x] 모든 rewrite 후보 graph를 나열하고 cost 감소폭으로 선택하는 enumerative baseline은
     당장 구현하지 않는다. 필요해지면 별도 stage로 분리한다.
 
 ### 1.1 Core lowering / decomposition

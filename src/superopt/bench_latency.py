@@ -36,12 +36,10 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def run_baseline(input_path: str, output_path: str) -> bool:
-    """Apply the rule-based onnx_rewrite baseline and save the result."""
+    """Apply the IR-based fair baseline and save the result."""
     try:
-        from src.onnx_rewrite.passes.passer import Passer
-        model = onnx.load(input_path)
-        model, _ = Passer().optimize(model)
-        onnx.save(model, output_path)
+        from src.superopt.baseline import optimize_ir_baseline
+        optimize_ir_baseline(input_path, output_path)
         return True
     except Exception as e:
         print(f"    baseline FAIL: {e}")
