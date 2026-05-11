@@ -75,6 +75,28 @@ strict `LLM_SUPPORTED_OPS` 기준 legality는 baseline 이후 별도 목표로 �
 - benchmark에서 반복적으로 보이는 패턴은 예외 없이 pass로 흡수한다
 - 단, 실험적이거나 불안정한 heuristic보다 재현 가능한 정석 rewrite를 우선한다
 
+### 1.1 Superopt 비교용 baseline은 너무 naive하면 안 된다
+
+superopt와 baseline은 가능한 한 같은 `RuleSpec` source-of-truth를 공유한다.
+다만 e-graph rule과 destructive ONNX rewrite는 적용 의미가 다르므로,
+baseline에서 모든 rule을 무조건 fixpoint로 반복하면 안 된다.
+
+특히 아래 rule family는 destructive baseline에서 cycle 또는 oscillation을 만들 수 있다.
+
+- `Add(x, y) -> Add(y, x)`
+- `Mul(x, y) -> Mul(y, x)`
+- associativity rewrite
+- commutation/fusion 탐색용 rewrite
+
+따라서 baseline은 rule을 성격별로 나눠 적용한다.
+
+- terminating legalization / decomposition rule: bounded fixpoint 적용
+- cleanup / canonicalization rule: bounded fixpoint 적용
+- exploratory equivalence rule: one-shot, 수동 ordering, 또는 baseline 제외
+
+목표는 "baseline이 멍청해서 superopt가 이긴다"를 피하고,
+e-graph의 실제 장점인 multi-path exploration / extraction만 비교에 남기는 것이다.
+
 ### 2. 평가 baseline도 강해야 한다
 
 수치 하나만 찍는 평가로 끝내지 않는다. 최소 검증 축은 아래 세 가지다.
@@ -103,6 +125,25 @@ LLM target contract는 decoder dense math의 최소 primitive만 남기고,
 ## 1. Rule-Based Rewrite Completion
 
 목표: benchmark 6종을 `supported op only`에 최대한 가깝게 내리는 강한 baseline rewrite를 갖춘다.
+
+### 1.0 Baseline pass scheduling 재정비
+
+현재 `Passer`는 shared `RuleSpec`을 한 번만 destructive scan으로 적용한다.
+이 때문에 `Sub -> Add(Neg)` 이후 새로 생긴 `Neg`가 같은 pass 안에서
+`Neg -> Mul(-1)`로 이어지지 않는 등 superopt 대비 불공정하게 약한 결과가 생긴다.
+
+TODO:
+
+[ ] `RuleSpec`을 terminating / cleanup / exploratory family로 분류한다.
+[ ] terminating + cleanup subset을 반환하는 helper를 만든다.
+[ ] baseline `Passer`에 bounded fixpoint loop를 추가한다.
+[ ] 각 iteration은 `RuleRunner(terminating_specs) -> ConstantFolding` 순서로 돈다.
+[ ] graph signature 또는 node/initializer 변화량으로 수렴 여부를 판단한다.
+[ ] `add_comm`, `mul_comm`, associativity, exploratory fusion rule은 fixpoint 대상에서 제외한다.
+[ ] excluded exploratory rule은 one-shot/manual ordering 적용 여부를 별도 decision으로 남긴다.
+[ ] `yolo26_nano`에서 baseline 잔여 `Neg`가 제거되는지 확인한다.
+[ ] `Unsqueeze/Squeeze -> Reshape`의 dynamic shape 정책을 superopt IR과 맞출지 결정한다.
+[ ] 6개 benchmark에 대해 baseline vs superopt 표를 재생성한다.
 
 ### 1.1 Core lowering / decomposition
 
