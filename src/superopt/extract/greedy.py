@@ -52,7 +52,7 @@ def extract_greedy(
     programs = extract_best(egraph, root_cid, cost_model, blacklist)
     if not programs:
         raise ValueError("cannot extract: no candidate programs")
-    return programs[0].ir
+    return programs.ir
 
 
 def extract_best(
@@ -60,7 +60,7 @@ def extract_best(
     root_cid: EClassId,
     cost_model: CostModel,
     blacklist: set[int],
-) -> list[ExtractedProgram]:
+) -> ExtractedProgram:
     """Extract the k lowest estimated-cost programs.
 
     This is a bounded bottom-up k-best extractor. It is still greedy at each
@@ -104,11 +104,9 @@ def extract_best(
         raise ValueError("cannot extract: root e-class has no candidates")
 
     cost, choice = best[root]
-    return [
-        ExtractedProgram(
+    return ExtractedProgram(
             cost=cost, ir=_build_ir_from_choices(egraph, choice, root)
-        )
-    ]
+            )
 
 
 def _try_extract_class(
@@ -134,6 +132,7 @@ def _try_extract_class(
         if translated is None:
             continue
 
+        translated[cid] = enode
         candidates.append((
             _node_cost(egraph, cid, enode, cost_model),
             translated,

@@ -8,7 +8,8 @@ import numpy as np
 import onnx
 from onnx import helper
 
-from src.common.rules import GraphBuilder, PatternSpec, RuleSpec, VarCheck
+from src.common.rules import GraphBuilder, RuleSpec, VarCheck
+from src.superopt.egraph.pattern import PatternNode, PatternVar
 
 from .folder import Folder
 
@@ -22,7 +23,7 @@ class RuleRunner(Folder):
             spec
             for spec in specs
             if _is_single_node_source(spec.source)
-            and (spec.target is not None or spec.build_fn is not None)
+            and spec.build_fn is not None
         ]
 
     def run(self, model: onnx.ModelProto) -> tuple[onnx.ModelProto, list[str]]:
@@ -49,9 +50,9 @@ class RuleRunner(Folder):
     def _match_node(
         self,
         node: onnx.NodeProto,
-        pattern: PatternSpec,
+        pattern: PatternNode,
     ) -> dict[str, str] | None:
-        if node.op_type != pattern.op or len(node.input) != len(pattern.args):
+        if node.op_type != pattern.op or len(node.input) != len(pattern.children):
             return None
         if pattern.attrs is not None:
             node_attrs = {attr.name: helper.get_attribute_value(attr) for attr in node.attribute}
@@ -59,15 +60,13 @@ class RuleRunner(Folder):
                 if node_attrs.get(key) != expected:
                     return None
         subst: dict[str, str] = {}
-        for arg, input_name in zip(pattern.args, node.input):
-            if not isinstance(arg, str):
+        for child, input_name in zip(pattern.children, node.input):
+            if not isinstance(child, PatternVar):
                 return None
-            if not arg.startswith("?"):
-                return None
-            prev = subst.get(arg)
+            prev = subst.get(child.name)
             if prev is not None and prev != input_name:
                 return None
-            subst[arg] = input_name
+            subst[child.name] = input_name
         return subst
 
     def _passes_checks(self, checks: tuple[VarCheck, ...], subst: dict[str, str]) -> bool:
@@ -103,29 +102,7 @@ class RuleRunner(Folder):
         spec: RuleSpec,
         subst: dict[str, str],
     ) -> bool:
-        if spec.build_fn is not None:
-            return self._apply_build_fn(node, spec, subst)
-
-        if spec.target is None:
-            raise ValueError(f"rule '{spec.name}' has no target and no build_fn")
-        if isinstance(spec.target, str):
-            replacement = subst[spec.target]
-            self._replace_value(node.output[0], replacement)
-            self.mark_for_removal(node)
-            return True
-
-        new_nodes: list[onnx.NodeProto] = []
-        final_value = self._emit_target(
-            spec.target,
-            subst,
-            node,
-            new_nodes,
-            output_name=node.output[0],
-        )
-        if final_value != node.output[0]:
-            self._replace_value(node.output[0], final_value)
-        self.replace_node(node, new_nodes)
-        return True
+        return self._apply_build_fn(node, spec, subst)
 
     def _apply_build_fn(
         self,
@@ -146,37 +123,6 @@ class RuleRunner(Folder):
         self.replace_node(node, builder.nodes)
         return True
 
-    def _emit_target(
-        self,
-        target: PatternSpec | str,
-        subst: dict[str, str],
-        source_node: onnx.NodeProto,
-        out_nodes: list[onnx.NodeProto],
-        output_name: str | None = None,
-    ) -> str:
-        if isinstance(target, str):
-            return subst[target]
-
-        inputs = [
-            self._emit_target(arg, subst, source_node, out_nodes)
-            if isinstance(arg, PatternSpec)
-            else subst[arg]
-            for arg in target.args
-        ]
-        prefix = self.get_prefix(source_node)
-        out_name = output_name or self.tensor_name(prefix, f"{target.op.lower()}_{len(out_nodes)}")
-        attrs = dict(target.attrs or ())
-        out_nodes.append(
-            helper.make_node(
-                target.op,
-                inputs,
-                [out_name],
-                name=self.node_name(prefix, f"{target.op.lower()}_{len(out_nodes)}"),
-                **_onnx_attrs(attrs),
-            )
-        )
-        return out_name
-
     def _replace_value(self, old: str, new: str) -> None:
         for consumer in self.get_consumers(old):
             for index, input_name in enumerate(consumer.input):
@@ -191,9 +137,11 @@ def _onnx_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
     return {key: list(value) if isinstance(value, tuple) else value for key, value in attrs.items()}
 
 
-def _is_single_node_source(pattern: PatternSpec) -> bool:
-    # ...? 
-    return all(isinstance(arg, str) for arg in pattern.args)
+def _is_single_node_source(pattern) -> bool:
+    """Check if the source pattern is a single node with only variable children."""
+    if not isinstance(pattern, PatternNode):
+        return False
+    return all(isinstance(child, PatternVar) for child in pattern.children)
 
 
 class OnnxGraphBuilder(GraphBuilder):

@@ -68,6 +68,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Use `intra_op_num_threads=1` and `inter_op_num_threads=1` for ORT sessions.
 - Prefer sequential execution over parallel when CPU load is a concern.
 - Do not launch background builds or tests that may compete for CPU.
+- When running benchmarks or model evaluations, run **one model at a time**. Never batch multiple models in a single command or run them in parallel.
+- Do not use the Task tool to spawn parallel agents for CPU-intensive work.
 
 ---
 

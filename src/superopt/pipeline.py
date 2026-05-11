@@ -134,6 +134,7 @@ def _attach_initializers(opt_ir: IRGraph, source_ir: IRGraph) -> None:
         if synth is not None:
             dtype_str, shape, data = synth
             arr = np.frombuffer(data, dtype=np.dtype(dtype_str)).reshape(shape)
+            # the meaning of copy? frombuffer is just view. so, we need to copy to make the arr has it's own memory. 
             opt_ir.add_initializer(name, arr.copy())
             continue
 
@@ -222,6 +223,7 @@ def superoptimize(
     cost_model = CostModel(supported_ops=supported_ops)
     opt_ir = extract_greedy(egraph, root_cid, cost_model, blacklist=blacklist)
 
+    # 3. Restoration to onnx. 
     opt_model = _make_output_model(opt_ir, ir, model)
     contract_result = check_contract(opt_model, contract) if contract else None
     onnx.save(opt_model, output_path)

@@ -134,16 +134,39 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     graph inputs/outputs spec.
     """
     ref_graph = ref_model.graph
-
     graph_inputs = _graph_inputs_for_ir(ir, ref_graph)
     graph_outputs = _graph_outputs_for_ir(ir, ref_graph)
+    initializers = _build_initializers(ir)
+    nodes = _build_onnx_nodes(ir)
+    value_info = _live_value_info(
+        ref_graph,
+        nodes,
+        graph_inputs,
+        graph_outputs,
+        initializers,
+    )
 
-    # Build initializers from IRGraph.
-    initializers: list[TensorProto] = []
-    for name, arr in ir.initializers.items():
-        initializers.append(numpy_helper.from_array(arr, name=name))
+    graph_def = onnx.helper.make_graph(
+        nodes,
+        ref_graph.name,
+        graph_inputs,
+        graph_outputs,
+        initializer=initializers,
+        value_info=value_info,
+    )
+    model = _make_model_like_ref(graph_def, ref_model)
+    return _checked_model_or_warn(model)
 
-    # Build proj→parent output name mapping.
+
+def _build_initializers(ir: IRGraph) -> list[TensorProto]:
+    return [
+        numpy_helper.from_array(arr, name=name)
+        for name, arr in ir.initializers.items()
+    ]
+
+
+def _build_proj_remap(ir: IRGraph) -> dict[str, str]:
+    # Build proj -> parent output name mapping.
     # Proj nodes reference a multi-output parent and select one output by index.
     # We resolve each proj id to the parent's actual ONNX output name.
     proj_remap: dict[str, str] = {}
@@ -159,25 +182,38 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
                 proj_remap[nid] = parent_outputs[idx]
             else:
                 proj_remap[nid] = parent_id
+    return proj_remap
 
-    def _resolve_inputs(inputs: tuple[str, ...]) -> list[str]:
-        return [proj_remap.get(inp, inp) for inp in inputs]
 
-    def _resolve_node_inputs(node: IRNode, attrs: dict[str, Any]) -> list[str]:
-        resolved = _resolve_inputs(node.inputs)
-        input_slots = attrs.pop(_INPUT_SLOTS_ATTR, None)
-        if input_slots is None:
-            return resolved
+def _resolve_inputs(
+    inputs: tuple[str, ...],
+    proj_remap: dict[str, str],
+) -> list[str]:
+    return [proj_remap.get(inp, inp) for inp in inputs]
 
-        resolved_iter = iter(resolved)
-        restored: list[str] = []
-        for slot in input_slots:
-            if slot == "":
-                restored.append("")
-            else:
-                restored.append(next(resolved_iter))
-        return restored
 
+def _resolve_node_inputs(
+    node: IRNode,
+    attrs: dict[str, Any],
+    proj_remap: dict[str, str],
+) -> list[str]:
+    resolved = _resolve_inputs(node.inputs, proj_remap)
+    input_slots = attrs.pop(_INPUT_SLOTS_ATTR, None)
+    if input_slots is None:
+        return resolved
+
+    resolved_iter = iter(resolved)
+    restored: list[str] = []
+    for slot in input_slots:
+        if slot == "":
+            restored.append("")
+        else:
+            restored.append(next(resolved_iter))
+    return restored
+
+
+def _build_onnx_nodes(ir: IRGraph) -> list[onnx.NodeProto]:
+    proj_remap = _build_proj_remap(ir)
     # Build nodes in topological order, skipping leaf/noop/proj ops.
     nodes: list[onnx.NodeProto] = []
     for nid in ir.topo_order():
@@ -189,7 +225,7 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
         node_name = attrs.pop(_NODE_NAME_ATTR, "")
         if _MULTI_OUTPUTS_ATTR in attrs:
             outputs = list(attrs.pop(_MULTI_OUTPUTS_ATTR))
-        inputs = _resolve_node_inputs(node, attrs)
+        inputs = _resolve_node_inputs(node, attrs, proj_remap)
         onnx_node = onnx.helper.make_node(
             node.op,
             inputs=inputs,
@@ -198,7 +234,16 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
             **_attrs_to_kwargs(attrs),
         )
         nodes.append(onnx_node)
+    return nodes
 
+
+def _live_value_info(
+    ref_graph: onnx.GraphProto,
+    nodes: list[onnx.NodeProto],
+    graph_inputs: list[onnx.ValueInfoProto],
+    graph_outputs: list[onnx.ValueInfoProto],
+    initializers: list[TensorProto],
+) -> list[onnx.ValueInfoProto]:
     live_value_names = set()
     for node in nodes:
         live_value_names.update(node.input)
@@ -206,20 +251,16 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
     live_value_names.update(init.name for init in initializers)
     live_value_names.update(inp.name for inp in graph_inputs)
     live_value_names.update(out.name for out in graph_outputs)
-    value_info = [
+    return [
         vi for vi in ref_graph.value_info
         if vi.name in live_value_names
     ]
 
-    graph_def = onnx.helper.make_graph(
-        nodes,
-        ref_graph.name,
-        graph_inputs,
-        graph_outputs,
-        initializer=initializers,
-        value_info=value_info,
-    )
 
+def _make_model_like_ref(
+    graph_def: onnx.GraphProto,
+    ref_model: onnx.ModelProto,
+) -> onnx.ModelProto:
     model = onnx.helper.make_model(graph_def)
     model.ir_version = ref_model.ir_version
     del model.opset_import[:]
@@ -227,7 +268,10 @@ def ir_to_onnx(ir: IRGraph, ref_model: onnx.ModelProto) -> onnx.ModelProto:
         new_opset = model.opset_import.add()
         new_opset.domain = opset.domain
         new_opset.version = opset.version
+    return model
 
+
+def _checked_model_or_warn(model: onnx.ModelProto) -> onnx.ModelProto:
     try:
         model = onnx.shape_inference.infer_shapes(model)
         onnx.checker.check_model(model)

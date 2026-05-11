@@ -67,6 +67,8 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - For ONNX Runtime sessions, default to `intra_op_num_threads=1` and `inter_op_num_threads=1`.
 - Prefer `ORT_SEQUENTIAL` when correctness or latency checks are running locally.
 - Do not fan out multiple benchmark or correctness runs in parallel unless the user explicitly asks for it.
+- When running benchmarks or model evaluations, run **one model at a time**. Never batch multiple models in a single command or run them in parallel.
+- Do not use the Task tool to spawn parallel agents for CPU-intensive work.
 - Keep warmup and repeat counts as small as the task allows before scaling them up.
 - If a command is likely to spike CPU usage, call that out before running it.
 
