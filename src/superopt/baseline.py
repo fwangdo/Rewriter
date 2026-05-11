@@ -7,6 +7,8 @@ manual destructive ordering here, e-graph saturation/extraction in superopt.
 
 from __future__ import annotations
 
+import argparse
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,8 @@ from .compat import run_post_passes, run_pre_passes
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+
+logger = logging.getLogger(__name__)
 
 
 _MANUAL_RULE_ORDER = (
@@ -394,3 +398,31 @@ def _as_value_id(value: Any) -> str:
 
 def _clean_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in name)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run the IR-based manual baseline on an ONNX model.",
+    )
+    parser.add_argument("-i", "--input", required=True, help="Path to input ONNX model")
+    parser.add_argument("-o", "--output", required=True, help="Path for rewritten ONNX model")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(name)s %(levelname)s: %(message)s",
+    )
+
+    result = optimize_ir_baseline(args.input, args.output)
+    logger.info(
+        "done: %d -> %d IR nodes",
+        result.original_nodes,
+        result.optimized_nodes,
+    )
+    for line in result.logs:
+        logger.info(line)
+
+
+if __name__ == "__main__":
+    main()
