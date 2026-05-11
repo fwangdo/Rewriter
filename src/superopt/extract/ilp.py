@@ -1,7 +1,4 @@
-"""Legacy ILP extraction for the hand-rolled e-graph.
-
-The main superopt pipeline no longer uses this extractor.  It is kept as a
-reference implementation while extraction logic moves to egglog.
+"""ILP extraction for the hand-rolled e-graph.
 
 Formulates extraction as an integer linear program:
 - Variables: t_c ∈ {0,1} for each e-class (active), x_n ∈ {0,1} for each e-node (selected)
@@ -10,7 +7,10 @@ Formulates extraction as an integer linear program:
   (1) t_root = 1
   (2) For each e-class c: Σ x_n = t_c  (exactly one enode if active)
   (3) For each e-node n with child e-class c': t_c' ≥ x_n
-  (4) Illegal enodes: x_n = 0 (unless eclass has no legal enodes → allow all)
+
+Supports two solver backends:
+- "scipy": SciPy milp / HiGHS (default, no extra deps)
+- "ortools_scip": Google OR-Tools with SCIP solver
 
 Reference: Tensat §4.2
 """
@@ -18,10 +18,10 @@ Reference: Tensat §4.2
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.optimize import Bounds, LinearConstraint, milp
-from scipy.sparse import csc_array
 
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
@@ -32,23 +32,68 @@ from .cost import CostModel
 logger = logging.getLogger(__name__)
 
 
-def extract_ilp(
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ILPProblem:
+    """Internal representation of the ILP to solve."""
+
+    reachable: list[EClassId]
+    eclass_enodes: dict[EClassId, list[tuple[int, ENode]]]
+    t_idx: dict[EClassId, int]
+    x_idx: dict[tuple[EClassId, int], int]
+    cost: np.ndarray        # objective coefficients, length n_vars
+    lb: np.ndarray           # lower bounds, length n_vars
+    ub: np.ndarray           # upper bounds, length n_vars
+    n_vars: int
+    n_eq: int                # number of equality constraints
+    n_ub: int                # number of inequality constraints
+    # Sparse triplets for equality constraints (Σ x_n - t_c = 0)
+    eq_rows: list[int] = field(default_factory=list)
+    eq_cols: list[int] = field(default_factory=list)
+    eq_data: list[float] = field(default_factory=list)
+    # Sparse triplets for inequality constraints (x_n - t_child ≤ 0)
+    ub_rows: list[int] = field(default_factory=list)
+    ub_cols: list[int] = field(default_factory=list)
+    ub_data: list[float] = field(default_factory=list)
+
+
+@dataclass
+class ILPStats:
+    """Statistics from an ILP extraction run."""
+
+    solver: str = ""
+    reachable_eclasses: int = 0
+    candidate_enodes: int = 0
+    variables: int = 0
+    equality_constraints: int = 0
+    inequality_constraints: int = 0
+    blacklisted_enodes: int = 0
+    illegal_candidate_enodes: int = 0
+    build_time_s: float = 0.0
+    solve_time_s: float = 0.0
+    objective_value: float | None = None
+    status: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Problem construction
+# ---------------------------------------------------------------------------
+
+def _build_problem(
     egraph: EGraph,
     root_cid: EClassId,
     cost_model: CostModel,
-    blacklist: set[int] | None = None,
-    soft_legalization: bool = False,
-) -> IRGraph:
-    """Extract the globally optimal program via ILP.
-
-    Unlike greedy extraction, this considers subgraph sharing
-    and finds the true minimum-cost DAG.
-    """
+    blacklist: set[int],
+    soft_legalization: bool,
+) -> tuple[ILPProblem, int, int]:
+    """Build the ILP problem. Returns (problem, blacklisted_count, illegal_count)."""
     root_cid = egraph.find(root_cid)
-    if blacklist is None:
-        blacklist = set()
+    blacklisted_count = 0
 
-    # 1. DFS from root to collect reachable eclasses.
+    # 1. DFS from root, skipping blacklisted enodes during traversal.
     reachable: list[EClassId] = []
     visited: set[EClassId] = set()
 
@@ -57,28 +102,58 @@ def extract_ilp(
         if cid in visited:
             return
         visited.add(cid)
-        for enode in egraph.eclass_nodes(cid):
+        ec = egraph.eclass(cid)
+        for nid in ec.nodes:
+            if nid in blacklist:
+                continue
+            enode = egraph.enode(nid)
             for child in enode.children:
                 _dfs(egraph.find(child))
         reachable.append(cid)
 
     _dfs(root_cid)
 
-    # 2. Assign variable indices.
-    # Collect enodes per eclass with their ids. Blacklisting is keyed by
-    # e-node id, so keep the id alongside the payload.
+    # 2. Collect candidate enodes, excluding blacklisted.
     eclass_enodes: dict[EClassId, list[tuple[int, ENode]]] = {}
     for cid in reachable:
         ec = egraph.eclass(cid)
-        eclass_enodes[cid] = [(nid, egraph.enode(nid)) for nid in ec.nodes]
+        candidates = []
+        for nid in ec.nodes:
+            if nid in blacklist:
+                blacklisted_count += 1
+                continue
+            candidates.append((nid, egraph.enode(nid)))
+        if not candidates:
+            raise RuntimeError(
+                f"e-class {cid} has no candidates after blacklist removal "
+                f"(all {len(ec.nodes)} enodes blacklisted)"
+            )
+        eclass_enodes[cid] = candidates
 
+    # In strict mode, filter illegal candidates where a legal alternative exists.
+    illegal_count = 0
+    if not soft_legalization:
+        for cid in reachable:
+            enodes = eclass_enodes[cid]
+            has_legal = any(cost_model.is_legal(en) for _nid, en in enodes)
+            if has_legal:
+                filtered = [(nid, en) for nid, en in enodes if cost_model.is_legal(en)]
+                illegal_count += len(enodes) - len(filtered)
+                eclass_enodes[cid] = filtered
+            else:
+                illegal_count += len(enodes)
+    else:
+        for cid in reachable:
+            for _nid, en in eclass_enodes[cid]:
+                if not cost_model.is_legal(en):
+                    illegal_count += 1
+
+    # 3. Assign variable indices.
     n_classes = len(reachable)
-    # t variables: indices [0, n_classes)
     t_idx: dict[EClassId, int] = {}
     for i, cid in enumerate(reachable):
         t_idx[cid] = i
 
-    # x variables: indices [n_classes, n_classes + total_enodes)
     x_idx: dict[tuple[EClassId, int], int] = {}
     idx = n_classes
     for cid in reachable:
@@ -87,8 +162,8 @@ def extract_ilp(
             idx += 1
     n_vars = idx
 
-    # 3. Cost vector: 0 for t vars, node_cost for x vars.
-    c = np.zeros(n_vars)
+    # 4. Cost vector.
+    cost = np.zeros(n_vars)
     for cid in reachable:
         for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
             ec_data = egraph.eclass(cid).data
@@ -96,43 +171,34 @@ def extract_ilp(
                 egraph.eclass(egraph.find(ch)).data.shape
                 for ch in enode.children
             ]
-            c[x_idx[(cid, j)]] = cost_model.node_cost(
+            cost[x_idx[(cid, j)]] = cost_model.node_cost(
                 enode, output_shape=ec_data.shape, input_shapes=child_shapes,
             )
 
-    # 4. Equality constraints: for each eclass, Σ x_n - t_c = 0.
-    eq_rows = []
-    eq_cols = []
-    eq_data = []
+    # 5. Equality constraints: Σ x_n - t_c = 0.
+    eq_rows: list[int] = []
+    eq_cols: list[int] = []
+    eq_data: list[float] = []
     for row, cid in enumerate(reachable):
-        # -t_c
         eq_rows.append(row)
         eq_cols.append(t_idx[cid])
         eq_data.append(-1.0)
-        # +x_n for each enode
         for j in range(len(eclass_enodes[cid])):
             eq_rows.append(row)
             eq_cols.append(x_idx[(cid, j)])
             eq_data.append(1.0)
 
-    A_eq = csc_array(
-        (eq_data, (eq_rows, eq_cols)),
-        shape=(n_classes, n_vars),
-    )
-    b_eq = np.zeros(n_classes)
-
-    # 5. Inequality constraints: x_n - t_{child} ≤ 0 for each (enode, child).
-    ub_rows = []
-    ub_cols = []
-    ub_data = []
+    # 6. Inequality constraints: x_n - t_child ≤ 0.
+    ub_rows: list[int] = []
+    ub_cols: list[int] = []
+    ub_data: list[float] = []
     ub_row = 0
     for cid in reachable:
         for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
             for child in enode.children:
                 child_cid = egraph.find(child)
                 if child_cid not in t_idx:
-                    continue  # unreachable child (shouldn't happen)
-                # x_n - t_{child} ≤ 0
+                    continue
                 ub_rows.append(ub_row)
                 ub_cols.append(x_idx[(cid, j)])
                 ub_data.append(1.0)
@@ -141,75 +207,183 @@ def extract_ilp(
                 ub_data.append(-1.0)
                 ub_row += 1
 
-    n_ub = ub_row
-    A_ub = csc_array(
-        (ub_data, (ub_rows, ub_cols)),
-        shape=(n_ub, n_vars),
-    ) if n_ub > 0 else csc_array((0, n_vars))
-    b_ub = np.zeros(n_ub)
-
-    # 6. Bounds.
+    # 7. Bounds.
     lb = np.zeros(n_vars)
-    ub = np.ones(n_vars)
+    ub_vec = np.ones(n_vars)
+    lb[t_idx[root_cid]] = 1.0  # root must be active
 
-    # Root must be active.
-    lb[t_idx[root_cid]] = 1.0
+    problem = ILPProblem(
+        reachable=reachable,
+        eclass_enodes=eclass_enodes,
+        t_idx=t_idx,
+        x_idx=x_idx,
+        cost=cost,
+        lb=lb,
+        ub=ub_vec,
+        n_vars=n_vars,
+        n_eq=n_classes,
+        n_ub=ub_row,
+        eq_rows=eq_rows,
+        eq_cols=eq_cols,
+        eq_data=eq_data,
+        ub_rows=ub_rows,
+        ub_cols=ub_cols,
+        ub_data=ub_data,
+    )
+    return problem, blacklisted_count, illegal_count
 
-    # Blacklisted enodes are structurally invalid after cycle handling.
-    for cid in reachable:
-        for j, (nid, _enode) in enumerate(eclass_enodes[cid]):
-            if nid in blacklist:
-                ub[x_idx[(cid, j)]] = 0.0
 
-    # In strict mode, fix illegal enodes to 0 unless an e-class has no legal
-    # alternative. In soft mode, leave them selectable and let node_cost's
-    # penalty steer the solver away from them.
-    for cid in reachable:
-        enodes = eclass_enodes[cid]
-        has_legal = any(cost_model.is_legal(en) for _nid, en in enodes)
-        if has_legal and not soft_legalization:
-            for j, (_nid, enode) in enumerate(enodes):
-                if not cost_model.is_legal(enode):
-                    ub[x_idx[(cid, j)]] = 0.0
+# ---------------------------------------------------------------------------
+# SciPy / HiGHS solver
+# ---------------------------------------------------------------------------
 
-    # 7. Solve.
-    integrality = np.ones(n_vars)
+def _solve_scipy(
+    problem: ILPProblem,
+    time_limit_s: float | None,
+    mip_gap: float | None,
+) -> tuple[np.ndarray, str, float | None]:
+    """Solve with SciPy milp (HiGHS). Returns (solution, status, objective)."""
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import csc_array
 
-    constraints = []
-    # Equality: A_eq x = b_eq
-    constraints.append(LinearConstraint(A_eq, b_eq, b_eq))
-    # Inequality: A_ub x ≤ b_ub
-    if n_ub > 0:
+    A_eq = csc_array(
+        (problem.eq_data, (problem.eq_rows, problem.eq_cols)),
+        shape=(problem.n_eq, problem.n_vars),
+    )
+    b_eq = np.zeros(problem.n_eq)
+
+    constraints = [LinearConstraint(A_eq, b_eq, b_eq)]
+
+    if problem.n_ub > 0:
+        A_ub = csc_array(
+            (problem.ub_data, (problem.ub_rows, problem.ub_cols)),
+            shape=(problem.n_ub, problem.n_vars),
+        )
+        b_ub = np.zeros(problem.n_ub)
         constraints.append(LinearConstraint(A_ub, -np.inf, b_ub))
 
-    bounds = Bounds(lb=lb, ub=ub)
+    bounds = Bounds(lb=problem.lb, ub=problem.ub)
+    integrality = np.ones(problem.n_vars)
+
+    options: dict = {}
+    if time_limit_s is not None:
+        options["time_limit"] = time_limit_s
+    if mip_gap is not None:
+        options["mip_rel_gap"] = mip_gap
 
     result = milp(
-        c=c,
+        c=problem.cost,
         constraints=constraints,
         integrality=integrality,
         bounds=bounds,
+        options=options if options else None,
     )
 
     if not result.success:
-        raise RuntimeError(f"ILP extraction failed: {result.message}")
+        raise RuntimeError(f"ILP extraction failed (scipy): {result.message}")
 
     sol = np.round(result.x).astype(int)
+    return sol, "optimal", float(result.fun)
 
-    # 8. Read solution → build IRGraph.
-    chosen: dict[EClassId, ENode] = {}
-    for cid in reachable:
-        for j, (_nid, enode) in enumerate(eclass_enodes[cid]):
-            if sol[x_idx[(cid, j)]] == 1:
-                chosen[cid] = enode
-                break
 
-    ir = IRGraph()
-    cid_to_node_id: dict[EClassId, str] = {}
-    root_id = _build_node_from_choices(egraph, chosen, ir, cid_to_node_id, root_cid)
-    ir.root = root_id
-    return ir
+# ---------------------------------------------------------------------------
+# OR-Tools / SCIP solver
+# ---------------------------------------------------------------------------
 
+def _solve_ortools_scip(
+    problem: ILPProblem,
+    time_limit_s: float | None,
+    mip_gap: float | None,
+) -> tuple[np.ndarray, str, float | None]:
+    """Solve with OR-Tools SCIP backend. Returns (solution, status, objective)."""
+    try:
+        from ortools.linear_solver import pywraplp
+    except ImportError:
+        raise RuntimeError(
+            "OR-Tools is not installed. Install with: "
+            "pip install ortools"
+        )
+
+    solver = pywraplp.Solver.CreateSolver("SCIP")
+    if solver is None:
+        raise RuntimeError(
+            "SCIP solver not available in OR-Tools. "
+            "Install with: pip install ortools"
+        )
+
+    if time_limit_s is not None:
+        solver.SetTimeLimit(int(time_limit_s * 1000))
+
+    # MIP gap: OR-Tools SCIP exposes this via solver parameters.
+    if mip_gap is not None:
+        # SCIP parameter for relative gap
+        solver.SetSolverSpecificParametersAsString(
+            f"limits/gap = {mip_gap}"
+        )
+
+    # Create binary variables.
+    variables = [
+        solver.BoolVar(f"v{i}") for i in range(problem.n_vars)
+    ]
+
+    # Apply bounds.
+    for i in range(problem.n_vars):
+        if problem.lb[i] == 1.0 and problem.ub[i] == 1.0:
+            solver.Add(variables[i] == 1)
+        elif problem.ub[i] == 0.0:
+            solver.Add(variables[i] == 0)
+
+    # Objective.
+    objective = solver.Objective()
+    for i in range(problem.n_vars):
+        if problem.cost[i] != 0.0:
+            objective.SetCoefficient(variables[i], problem.cost[i])
+    objective.SetMinimization()
+
+    # Equality constraints: build row-wise.
+    eq_row_map: dict[int, list[tuple[int, float]]] = {}
+    for r, c, d in zip(problem.eq_rows, problem.eq_cols, problem.eq_data):
+        eq_row_map.setdefault(r, []).append((c, d))
+    for row_entries in eq_row_map.values():
+        ct = solver.Constraint(0.0, 0.0)
+        for col, val in row_entries:
+            ct.SetCoefficient(variables[col], val)
+
+    # Inequality constraints: x_n - t_child ≤ 0.
+    ub_row_map: dict[int, list[tuple[int, float]]] = {}
+    for r, c, d in zip(problem.ub_rows, problem.ub_cols, problem.ub_data):
+        ub_row_map.setdefault(r, []).append((c, d))
+    for row_entries in ub_row_map.values():
+        ct = solver.Constraint(-solver.infinity(), 0.0)
+        for col, val in row_entries:
+            ct.SetCoefficient(variables[col], val)
+
+    # Solve.
+    status = solver.Solve()
+
+    status_map = {
+        pywraplp.Solver.OPTIMAL: "optimal",
+        pywraplp.Solver.FEASIBLE: "feasible",
+        pywraplp.Solver.INFEASIBLE: "infeasible",
+        pywraplp.Solver.UNBOUNDED: "unbounded",
+        pywraplp.Solver.ABNORMAL: "abnormal",
+        pywraplp.Solver.NOT_SOLVED: "not_solved",
+    }
+    status_str = status_map.get(status, f"unknown({status})")
+
+    if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
+        raise RuntimeError(
+            f"ILP extraction failed (ortools_scip): {status_str}"
+        )
+
+    sol = np.array([int(v.solution_value()) for v in variables])
+    obj_val = solver.Objective().Value()
+    return sol, status_str, obj_val
+
+
+# ---------------------------------------------------------------------------
+# IRGraph reconstruction (unchanged)
+# ---------------------------------------------------------------------------
 
 def _build_node_from_choices(
     egraph: EGraph,
@@ -227,11 +401,7 @@ def _build_node_from_choices(
     enode = choices[cid]
     child_ids = [
         _build_node_from_choices(
-            egraph,
-            choices,
-            ir,
-            cid_to_node_id,
-            egraph.find(child),
+            egraph, choices, ir, cid_to_node_id, egraph.find(child),
         )
         for child in enode.children
     ]
@@ -257,3 +427,98 @@ def _node_id(egraph: EGraph, cid: EClassId) -> str:
     if ec.data.preferred_name:
         return ec.data.preferred_name
     return f"_e{cid}"
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def extract_ilp(
+    egraph: EGraph,
+    root_cid: EClassId,
+    cost_model: CostModel,
+    blacklist: set[int] | None = None,
+    soft_legalization: bool = True,
+    solver: str = "scipy",
+    time_limit_s: float | None = None,
+    mip_gap: float | None = None,
+) -> tuple[IRGraph, ILPStats]:
+    """Extract the globally optimal program via ILP.
+
+    Returns (ir_graph, stats).
+
+    Parameters
+    ----------
+    solver : "scipy" | "ortools_scip"
+    soft_legalization : if True, illegal enodes get high cost but remain
+        selectable. If False, illegal enodes are removed when a legal
+        alternative exists in the same e-class.
+    time_limit_s : solver time limit in seconds (None = no limit).
+    mip_gap : relative MIP gap tolerance (None = solver default).
+    """
+    if blacklist is None:
+        blacklist = set()
+
+    # Build.
+    t_build = time.monotonic()
+    problem, blacklisted_count, illegal_count = _build_problem(
+        egraph, egraph.find(root_cid), cost_model, blacklist, soft_legalization,
+    )
+    build_time = time.monotonic() - t_build
+
+    total_enodes = sum(len(v) for v in problem.eclass_enodes.values())
+
+    stats = ILPStats(
+        solver=solver,
+        reachable_eclasses=len(problem.reachable),
+        candidate_enodes=total_enodes,
+        variables=problem.n_vars,
+        equality_constraints=problem.n_eq,
+        inequality_constraints=problem.n_ub,
+        blacklisted_enodes=blacklisted_count,
+        illegal_candidate_enodes=illegal_count,
+        build_time_s=round(build_time, 4),
+    )
+
+    logger.info(
+        "ILP built: %d eclasses, %d enodes, %d vars, %d eq, %d ub "
+        "(%d blacklisted, %d illegal) [%.2fs]",
+        stats.reachable_eclasses, stats.candidate_enodes, stats.variables,
+        stats.equality_constraints, stats.inequality_constraints,
+        stats.blacklisted_enodes, stats.illegal_candidate_enodes,
+        stats.build_time_s,
+    )
+
+    # Solve.
+    t_solve = time.monotonic()
+    if solver == "scipy":
+        sol, status, obj_val = _solve_scipy(problem, time_limit_s, mip_gap)
+    elif solver == "ortools_scip":
+        sol, status, obj_val = _solve_ortools_scip(problem, time_limit_s, mip_gap)
+    else:
+        raise ValueError(f"unknown ILP solver: {solver!r} (use 'scipy' or 'ortools_scip')")
+    solve_time = time.monotonic() - t_solve
+
+    stats.solve_time_s = round(solve_time, 4)
+    stats.objective_value = obj_val
+    stats.status = status
+
+    logger.info(
+        "ILP solved: status=%s obj=%.1f [%.2fs]",
+        status, obj_val if obj_val is not None else -1, solve_time,
+    )
+
+    # Reconstruct IRGraph from solution.
+    chosen: dict[EClassId, ENode] = {}
+    for cid in problem.reachable:
+        for j, (_nid, enode) in enumerate(problem.eclass_enodes[cid]):
+            if sol[problem.x_idx[(cid, j)]] == 1:
+                chosen[cid] = enode
+                break
+
+    ir = IRGraph()
+    cid_to_node_id: dict[EClassId, str] = {}
+    root_cid = egraph.find(root_cid)
+    root_id = _build_node_from_choices(egraph, chosen, ir, cid_to_node_id, root_cid)
+    ir.root = root_id
+    return ir, stats

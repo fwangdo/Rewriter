@@ -21,7 +21,7 @@ from .egraph.egraph import EGraph
 from .egraph.enode import EClassId, ENode
 from .explore.explorer import explore, ExploreStats
 from .extract.cost import CostModel
-from .extract.ilp import extract_ilp
+from .extract.ilp import ILPStats, extract_ilp
 from .ir.convert import ir_to_onnx, onnx_to_ir
 from .ir.graph import IRGraph
 from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
@@ -60,6 +60,7 @@ class SuperoptResult:
     original_nodes: int = 0
     optimized_nodes: int = 0
     explore_stats: ExploreStats = field(default_factory=ExploreStats)
+    ilp_stats: ILPStats | None = None
     estimated_cost: float | None = None
     contract_result: dict[str, object] | None = None
 
@@ -187,6 +188,9 @@ def superoptimize(
     supported_ops: frozenset[str] | None = None,
     max_iter: int = 15,
     max_nodes: int = 50_000,
+    ilp_solver: str = "scipy",
+    ilp_time_limit_s: float | None = None,
+    ilp_mip_gap: float | None = None,
 ) -> SuperoptResult:
     """Run the full superoptimization pipeline on an ONNX model.
 
@@ -211,15 +215,18 @@ def superoptimize(
 
     # 2. Extraction
     cost_model = CostModel(supported_ops=supported_ops)
-    opt_ir = extract_ilp(
+    opt_ir, ilp_stats = extract_ilp(
         egraph,
         root_cid,
         cost_model,
         blacklist=blacklist,
         soft_legalization=True,
+        solver=ilp_solver,
+        time_limit_s=ilp_time_limit_s,
+        mip_gap=ilp_mip_gap,
     )
 
-    # 3. Restoration to onnx. 
+    # 3. Restoration to onnx.
     opt_model = _make_output_model(opt_ir, ir, model)
     contract_result = check_contract(opt_model, contract) if contract else None
     onnx.save(opt_model, output_path)
@@ -230,5 +237,6 @@ def superoptimize(
         original_nodes=original_nodes,
         optimized_nodes=_count_compute_nodes(opt_ir),
         explore_stats=stats,
+        ilp_stats=ilp_stats,
         contract_result=contract_result,
     )

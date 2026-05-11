@@ -35,6 +35,14 @@ def main() -> None:
     )
     parser.add_argument("--max-iter", type=int, default=15)
     parser.add_argument("--max-nodes", type=int, default=50_000)
+    parser.add_argument(
+        "--ilp-solver",
+        choices=("scipy", "ortools_scip"),
+        default="scipy",
+        help="ILP solver backend (default: scipy)",
+    )
+    parser.add_argument("--ilp-time-limit", type=float, default=None,
+                        help="ILP solver time limit in seconds")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
@@ -49,6 +57,8 @@ def main() -> None:
         CONTRACTS[args.contract],
         max_iter=args.max_iter,
         max_nodes=args.max_nodes,
+        ilp_solver=args.ilp_solver,
+        ilp_time_limit_s=args.ilp_time_limit,
     )
 
     logger.info(

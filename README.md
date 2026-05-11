@@ -25,7 +25,7 @@ ONNX model을 target backend가 실행할 수 있는 graph로 낮추고, correct
 | --- | --- |
 | `src/common/rules` | 공유 rewrite 규칙. `get_all_specs()`로 42개 RuleSpec을 로드하며 baseline과 superopt 모두 이 함수를 단일 진실 공급원으로 사용한다. |
 | `src/onnx_rewrite` | rule-based baseline. ONNX 레벨에서 ConstantFolding → RuleRunner → Cleanup 파이프라인을 적용한다. |
-| `src/superopt` | e-graph 기반 superopt. ONNX를 IR로 낮추고, equality saturation으로 rewrite space를 탐색한 뒤 cost-aware extraction으로 candidate를 추출한다. |
+| `src/superopt` | e-graph 기반 superopt. ONNX를 IR로 낮추고, equality saturation으로 rewrite space를 탐색한 뒤 ILP extraction으로 candidate를 추출한다. |
 
 Superopt의 큰 흐름은 다음과 같다.
 
@@ -34,7 +34,7 @@ ONNX model
   -> pre-pass (ConstantFolding)
   -> ONNX -> IR
   -> e-graph equality saturation (shared RuleSpecs)
-  -> cost-aware greedy extraction
+  -> ILP extraction (SciPy/HiGHS 기본, OR-Tools SCIP 선택)
   -> IR -> ONNX materialization
   -> post-pass (ConstantFolding, shape inference, Cleanup)
   -> contract check
@@ -77,16 +77,31 @@ baseline과 superopt는 `src/common/rules/`에 정의된 동일한 42개 규칙�
 
 ### Results
 
-6개 모델 전부 superopt illegal=0 통과. 자세한 비교는 [report.md](report.md)를 본다.
+현재 superopt는 greedy local-best extraction에서 ILP extraction으로 전환 중이다.
+ILP는 global legality를 더 잘 다루지만, 큰 e-graph에서는 solver budget이 병목이 된다.
+자세한 비교와 ILP 실험 결과는 [report.md](report.md)를 본다.
+
+Greedy + `children_cost` 결과:
 
 | Model | Original | Baseline | BL illegal | Superopt | SO illegal |
 |-------|----------|----------|------------|----------|------------|
 | mobilenetv2 | 100 | 100 | 0 | 103 | 0 |
-| yolo26_nano | 397 | 400 | 8 | 405 | 0 |
-| mobilevit_xxs | 417 | 576 | 0 | 742 | 0 |
-| tinyllama_15m | 1152 | 776 | 2 | 707 | 0 |
-| pythia_70m | 589 | 619 | 9 | 704 | 0 |
-| smollm_135m | 2844 | 3103 | 0 | 3379 | 0 |
+| yolo26_nano | 397 | 400 | 8 | 402 | 5 |
+| mobilevit_xxs | 417 | 576 | 0 | 507 | 17 |
+| tinyllama_15m | 1152 | 776 | 2 | 702 | 8 |
+| pythia_70m | 589 | 619 | 9 | 666 | 3 |
+| smollm_135m | 2844 | 3103 | 0 | 3119 | 124 |
+
+ILP soft extraction에서 확인한 legal 결과:
+
+| Model | max_nodes | ILP Superopt | Illegal |
+|-------|-----------|--------------|---------|
+| mobilenetv2 | 50000 | 100 | 0 |
+| yolo26_nano | 50000 | 397 | 0 |
+| tinyllama_15m | 50000 | 701 | 0 |
+| mobilevit_xxs | 5000 | 576 | 0 |
+| pythia_70m | 2000 | 603 | 0 |
+| smollm_135m | 5000 | 3092 | 0 |
 
 ## Evaluation
 
@@ -134,6 +149,19 @@ python3.11 -m src.superopt.run \
   --contract vision
 ```
 
+ILP solver / budget 선택:
+
+```bash
+python3.11 -m src.superopt.run \
+  -i benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
+  -o artifacts/superopt/mobilenetv2.onnx \
+  --contract vision \
+  --ilp-solver scipy \
+  --ilp-time-limit 60
+```
+
+`--ilp-solver ortools_scip`는 OR-Tools가 설치된 환경에서 SCIP backend를 사용한다.
+
 Full benchmark (baseline + superopt, all models):
 
 ```bash
@@ -149,14 +177,18 @@ python3.11 -m src.superopt.bench_all
 - baseline과 superopt가 동일한 42개 RuleSpec을 공유한다 (`get_all_specs()`).
 - ONNX graph를 IR로 낮춘 뒤 다시 ONNX로 materialize하는 경로가 있다.
 - hand-rolled e-graph 기반 equality saturation을 main path로 사용한다.
-- 6개 benchmark 모델 전부 superopt에서 contract violation 없이 통과한다.
+- extraction은 ILP 기반이며, 기본 backend는 SciPy/HiGHS다.
+- OR-Tools SCIP backend를 선택할 수 있도록 solver abstraction과 ILP stats를 추가했다.
+- 적절한 `max_nodes`에서는 6개 benchmark 모두 ILP superopt가 contract violation 없이 통과한다.
 - candidate를 실제 ORT correctness와 latency로 평가하는 방향이 잡혀 있다.
 - CPU budget은 single-thread / sequential ORT 실행을 기본으로 둔다.
 
 아직 닫아야 할 부분:
 
-- superopt이 baseline보다 노드 수가 많은 경우가 있다 (cost model / extraction 개선 필요).
-- mobilevit_xxs, pythia_70m에서 saturation에 90~110초 소요 (산술 규칙 match 폭발).
+- 큰 e-graph를 50k까지 키우면 ILP solver가 장시간 멈출 수 있다.
+- ILP backend별 solve time, variable/constraint 수, gap/status를 정량 비교해야 한다.
+- blacklisted/dead candidate 제거와 structural dominance pruning이 필요하다.
+- mobilevit_xxs, pythia_70m에서 saturation/ILP solve budget tuning이 필요하다.
 - original / pre-pass를 candidate 0으로 포함하는 fallback.
 - materialized graph hash dedup.
 - 자동 regression test suite.
