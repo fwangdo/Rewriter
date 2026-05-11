@@ -19,40 +19,48 @@ ONNX model을 target backend가 실행할 수 있는 graph로 낮추고, correct
 
 ## Architecture
 
-현재 코드는 두 축으로 나뉜다.
+코드는 세 축으로 나뉜다.
 
 | 경로 | 역할 |
 | --- | --- |
-| `src/onnx_rewrite` | rule-based baseline. well-known ONNX graph rewrite를 직접 적용하고 audit / correctness / latency를 측정한다. |
-| `src/superopt` | e-graph 기반 후보 생성. ONNX를 IR로 낮추고, egglog와 legacy callback bridge를 통해 rewrite space를 넓힌 뒤 candidate를 추출한다. |
+| `src/common/rules` | 공유 rewrite 규칙. `get_all_specs()`로 42개 RuleSpec을 로드하며 baseline과 superopt 모두 이 함수를 단일 진실 공급원으로 사용한다. |
+| `src/onnx_rewrite` | rule-based baseline. ONNX 레벨에서 ConstantFolding → RuleRunner → Cleanup 파이프라인을 적용한다. |
+| `src/superopt` | e-graph 기반 superopt. ONNX를 IR로 낮추고, equality saturation으로 rewrite space를 탐색한 뒤 cost-aware extraction으로 candidate를 추출한다. |
 
 Superopt의 큰 흐름은 다음과 같다.
 
 ```text
 ONNX model
-  -> pre-pass / shape inference
+  -> pre-pass (ConstantFolding)
   -> ONNX -> IR
-  -> callback legalization bridge
-  -> egglog equality saturation
-  -> cost-aware candidate extraction
+  -> e-graph equality saturation (shared RuleSpecs)
+  -> cost-aware greedy extraction
   -> IR -> ONNX materialization
-  -> contract / correctness / latency evaluation
+  -> post-pass (ConstantFolding, shape inference, Cleanup)
+  -> contract check
 ```
 
-`egglog`는 pure pattern rewrite의 saturation과 extraction에 사용한다. Python-side shape/value inspection이나 synthetic constant generation이 필요한 rule은 아직 `src/superopt/egraph`의 legacy bridge로 materialize한다.
+## Shared Rewrite Rules
+
+baseline과 superopt는 `src/common/rules/`에 정의된 동일한 42개 규칙을 공유한다.
+전체 목록은 [docs/rules.md](docs/rules.md)를 본다.
+
+| Category | Count | 예시 |
+| --- | --- | --- |
+| Legalization | 34 | `neg_to_mul`, `layernorm_decompose`, `gemm_decompose`, `matmul_to_conv` |
+| Arithmetic | 4 | `add_comm`, `mul_comm`, `add_assoc_right`, `mul_assoc_right` |
+| Layout | 3 | `reshape_reshape`, `transpose_cancel_perm_*` |
+| Fusion | 1 | `bias_add_commute` |
 
 ## Target Contracts
 
-지원 op contract는 `src/common/contracts.py`와 `src/superopt/contracts.py`에 있다.
+지원 op contract는 `src/common/contracts.py`에 있다.
 
 | Contract | 용도 |
 | --- | --- |
-| `SUPPORTED_OPS` | scaffold / ORT CPU friendly union set |
 | `VISION_SUPPORTED_OPS` | vision model target |
 | `LLM_SUPPORTED_OPS` | decoder LLM target |
-| `LLM_MUST_REMOVE_OPS` | LLM path에서 반드시 제거해야 하는 op |
-
-현재 superopt extraction은 unsupported op에 큰 cost penalty를 주고 contract check 결과를 기록한다. 최종 candidate selection에서 contract를 hard gate로 완전히 닫는 작업은 진행 중이다.
+| `UNION_SUPPORTED_OPS` | scaffold / ORT CPU friendly union set |
 
 ## Benchmark Models
 
@@ -60,12 +68,25 @@ ONNX model
 
 | # | Model | Domain | Target |
 | --- | --- | --- | --- |
-| 1 | MobileViT-XXS | Vision / hybrid | `VISION_SUPPORTED_OPS` |
-| 2 | MobileNetV2 | Vision / CNN | `VISION_SUPPORTED_OPS` |
+| 1 | MobileNetV2 | Vision / CNN | `VISION_SUPPORTED_OPS` |
+| 2 | MobileViT-XXS | Vision / hybrid | `VISION_SUPPORTED_OPS` |
 | 3 | YOLO26-Nano | Vision / detection | `VISION_SUPPORTED_OPS` |
 | 4 | TinyLlama-15M | LLM / decoder | `LLM_SUPPORTED_OPS` |
 | 5 | Pythia-70M | LLM / decoder | `LLM_SUPPORTED_OPS` |
 | 6 | SmolLM-135M | LLM / decoder | `LLM_SUPPORTED_OPS` |
+
+### Results
+
+6개 모델 전부 superopt illegal=0 통과. 자세한 비교는 [report.md](report.md)를 본다.
+
+| Model | Original | Baseline | BL illegal | Superopt | SO illegal |
+|-------|----------|----------|------------|----------|------------|
+| mobilenetv2 | 100 | 100 | 0 | 103 | 0 |
+| yolo26_nano | 397 | 400 | 8 | 405 | 0 |
+| mobilevit_xxs | 417 | 576 | 0 | 742 | 0 |
+| tinyllama_15m | 1152 | 776 | 2 | 707 | 0 |
+| pythia_70m | 589 | 619 | 9 | 704 | 0 |
+| smollm_135m | 2844 | 3103 | 0 | 3379 | 0 |
 
 ## Evaluation
 
@@ -82,10 +103,9 @@ Correctness와 latency는 ONNX Runtime CPU 기준으로 측정한다.
 
 | 항목 | 의미 |
 | --- | --- |
-| Contract result | unsupported / must-remove op가 남았는지 |
+| Contract result | unsupported op가 남았는지 |
 | Correctness | output count, shape, dtype, value tolerance |
 | Latency | original / rule baseline / ORT optimizer / superopt candidate 비교 |
-| Candidate count | e-graph extraction에서 나온 후보 수 |
 | Estimated cost | extraction heuristic 값. 최종 성능값으로 보지 않는다. |
 
 ## Usage
@@ -105,19 +125,19 @@ python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
   --output artifacts/rewrite/mobilenetv2.onnx
 ```
 
-Rewrite + correctness + latency:
+Superopt:
 
 ```bash
-python3.11 -m src.onnx_rewrite.eval_rewrite \
-  --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
-  --output artifacts/rewrite/mobilenetv2.onnx \
-  --report artifacts/rewrite/mobilenetv2_eval.json
+python3.11 -m src.superopt.run \
+  -i benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
+  -o artifacts/superopt/mobilenetv2.onnx \
+  --contract vision
 ```
 
-Superopt latency benchmark:
+Full benchmark (baseline + superopt, all models):
 
 ```bash
-python3.11 -m src.superopt.bench_latency
+python3.11 -m src.superopt.bench_all
 ```
 
 ## Current Status
@@ -126,29 +146,26 @@ python3.11 -m src.superopt.bench_latency
 
 잘 되어 있는 부분:
 
-- ONNX rewrite baseline과 e-graph superopt path가 분리되어 있다.
+- baseline과 superopt가 동일한 42개 RuleSpec을 공유한다 (`get_all_specs()`).
 - ONNX graph를 IR로 낮춘 뒤 다시 ONNX로 materialize하는 경로가 있다.
-- egglog 기반 equality saturation을 main path로 사용한다.
-- callback이 필요한 legalization rule을 별도 bridge로 처리한다.
+- hand-rolled e-graph 기반 equality saturation을 main path로 사용한다.
+- 6개 benchmark 모델 전부 superopt에서 contract violation 없이 통과한다.
 - candidate를 실제 ORT correctness와 latency로 평가하는 방향이 잡혀 있다.
 - CPU budget은 single-thread / sequential ORT 실행을 기본으로 둔다.
 
 아직 닫아야 할 부분:
 
-- contract violation을 최종 selection의 hard failure로 만드는 정책
-- original / pre-pass를 candidate 0으로 포함하는 fallback
-- materialized graph hash dedup
-- 모델당 timeout과 node budget
-- rule metadata와 correctness failure bisect
-- 자동 regression test suite
-- JSON / Markdown report schema
+- superopt이 baseline보다 노드 수가 많은 경우가 있다 (cost model / extraction 개선 필요).
+- mobilevit_xxs, pythia_70m에서 saturation에 90~110초 소요 (산술 규칙 match 폭발).
+- original / pre-pass를 candidate 0으로 포함하는 fallback.
+- materialized graph hash dedup.
+- 자동 regression test suite.
 
 ## Related Work
 
 - **Tensat**: tensor graph superoptimization with equality saturation.
-- **egglog**: e-graph / equality saturation backend.
+- **egg**: e-graph / equality saturation library (Willsey et al., 2020).
 - **ONNX Runtime graph optimizer**: baseline optimizer and execution reference.
-- **ONNX Simplifier**: rule-based ONNX simplification baseline.
 
 ## Project Thesis
 
