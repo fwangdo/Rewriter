@@ -188,8 +188,8 @@ def superoptimize(
     supported_ops: frozenset[str] | None = None,
     max_iter: int = 15,
     max_nodes: int = 50_000,
-    ilp_solver: str = "scipy",
-    ilp_time_limit_s: float | None = None,
+    ilp_solver: str = "ortools_scip",
+    ilp_time_limit_s: float | None = 600,
     ilp_mip_gap: float | None = None,
 ) -> SuperoptResult:
     """Run the full superoptimization pipeline on an ONNX model.

@@ -38,11 +38,11 @@ def main() -> None:
     parser.add_argument(
         "--ilp-solver",
         choices=("scipy", "ortools_scip"),
-        default="scipy",
-        help="ILP solver backend (default: scipy)",
+        default="ortools_scip",
+        help="ILP solver backend (default: ortools_scip)",
     )
-    parser.add_argument("--ilp-time-limit", type=float, default=None,
-                        help="ILP solver time limit in seconds")
+    parser.add_argument("--ilp-time-limit", type=float, default=600,
+                        help="ILP solver time limit in seconds (default: 600)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 

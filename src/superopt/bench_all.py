@@ -37,6 +37,14 @@ def parse_args() -> argparse.Namespace:
         default="comp",
         help="Run only baseline, only superopt, or both for comparison.",
     )
+    parser.add_argument(
+        "--ilp-solver",
+        choices=("scipy", "ortools_scip"),
+        default="ortools_scip",
+        help="ILP solver backend (default: ortools_scip)",
+    )
+    parser.add_argument("--ilp-time-limit", type=float, default=600,
+                        help="ILP solver time limit in seconds (default: 600)")
     return parser.parse_args()
 
 
@@ -70,8 +78,11 @@ def run_baseline(model_path: str, domain: str):
 
 
 def run_superopt(model_path: str, output_path: str, domain: str,
-                 max_iter: int = 15, max_nodes: int = 50_000):
+                 max_iter: int = 15, max_nodes: int = 50_000,
+                 ilp_solver: str = "scipy",
+                 ilp_time_limit_s: float | None = None):
     """Run superopt pipeline, return op counts."""
+    from dataclasses import asdict
     from src.superopt.pipeline import superoptimize
 
     supported = get_supported_ops(domain)
@@ -79,13 +90,15 @@ def run_superopt(model_path: str, output_path: str, domain: str,
     result = superoptimize(
         model_path, output_path, supported,
         max_iter=max_iter, max_nodes=max_nodes,
+        ilp_solver=ilp_solver,
+        ilp_time_limit_s=ilp_time_limit_s,
     )
     elapsed = time.time() - t0
 
     model = onnx.load(output_path)
     ops = Counter(n.op_type for n in model.graph.node)
     illegal = {op: cnt for op, cnt in ops.items() if op not in supported}
-    return {
+    out = {
         "total_ops": sum(ops.values()),
         "illegal": dict(sorted(illegal.items())),
         "illegal_count": sum(illegal.values()),
@@ -97,6 +110,9 @@ def run_superopt(model_path: str, output_path: str, domain: str,
         "explore_matches": result.explore_stats.total_matches,
         "explore_applied": result.explore_stats.total_applied,
     }
+    if result.ilp_stats is not None:
+        out["ilp_stats"] = asdict(result.ilp_stats)
+    return out
 
 
 def main():
@@ -124,17 +140,23 @@ def main():
                 bl = run_baseline(str(model_path), domain)
                 print(f"  [baseline] {bl['total_ops']} ops, {bl['illegal_count']} illegal, {bl['time_s']}s")
             except Exception as e:
+                import traceback
                 print(f"  [baseline] FAILED: {e}")
+                traceback.print_exc()
 
         so = None
         if args.mode in ("superopt", "comp"):
             print("  [superopt] running...")
             try:
                 so = run_superopt(str(model_path), str(output_path), domain,
-                                  max_iter=max_iter, max_nodes=max_nodes)
+                                  max_iter=max_iter, max_nodes=max_nodes,
+                                  ilp_solver=args.ilp_solver,
+                                  ilp_time_limit_s=args.ilp_time_limit)
                 print(f"  [superopt] {so['total_ops']} ops, {so['illegal_count']} illegal, {so['time_s']}s")
             except Exception as e:
+                import traceback
                 print(f"  [superopt] FAILED: {e}")
+                traceback.print_exc()
 
         results.append({
             "domain": domain,
