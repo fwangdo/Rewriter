@@ -37,12 +37,6 @@ def parse_args() -> argparse.Namespace:
         default="comp",
         help="Run only baseline, only superopt, or both for comparison.",
     )
-    parser.add_argument(
-        "--ilp-solver",
-        choices=("scipy", "ortools_scip"),
-        default="ortools_scip",
-        help="ILP solver backend (default: ortools_scip)",
-    )
     parser.add_argument("--ilp-time-limit", type=float, default=600,
                         help="ILP solver time limit in seconds (default: 600)")
     return parser.parse_args()
@@ -79,8 +73,7 @@ def run_baseline(model_path: str, domain: str):
 
 def run_superopt(model_path: str, output_path: str, domain: str,
                  max_iter: int = 15, max_nodes: int = 50_000,
-                 ilp_solver: str = "scipy",
-                 ilp_time_limit_s: float | None = None):
+                 ilp_time_limit_s: float | None = 600):
     """Run superopt pipeline, return op counts."""
     from dataclasses import asdict
     from src.superopt.pipeline import superoptimize
@@ -90,7 +83,6 @@ def run_superopt(model_path: str, output_path: str, domain: str,
     result = superoptimize(
         model_path, output_path, supported,
         max_iter=max_iter, max_nodes=max_nodes,
-        ilp_solver=ilp_solver,
         ilp_time_limit_s=ilp_time_limit_s,
     )
     elapsed = time.time() - t0
@@ -150,7 +142,6 @@ def main():
             try:
                 so = run_superopt(str(model_path), str(output_path), domain,
                                   max_iter=max_iter, max_nodes=max_nodes,
-                                  ilp_solver=args.ilp_solver,
                                   ilp_time_limit_s=args.ilp_time_limit)
                 print(f"  [superopt] {so['total_ops']} ops, {so['illegal_count']} illegal, {so['time_s']}s")
             except Exception as e:

@@ -8,9 +8,7 @@ Formulates extraction as an integer linear program:
   (2) For each e-class c: Σ x_n = t_c  (exactly one enode if active)
   (3) For each e-node n with child e-class c': t_c' ≥ x_n
 
-Supports two solver backends:
-- "scipy": SciPy milp / HiGHS (default, no extra deps)
-- "ortools_scip": Google OR-Tools with SCIP solver
+Uses OR-Tools SCIP solver.
 
 Reference: Tensat §4.2
 """
@@ -22,6 +20,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
+from ortools.linear_solver import pywraplp
 
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
@@ -64,7 +63,6 @@ class ILPProblem:
 class ILPStats:
     """Statistics from an ILP extraction run."""
 
-    solver: str = ""
     reachable_eclasses: int = 0
     candidate_enodes: int = 0
     variables: int = 0
@@ -234,89 +232,23 @@ def _build_problem(
 
 
 # ---------------------------------------------------------------------------
-# SciPy / HiGHS solver
+# SCIP solver
 # ---------------------------------------------------------------------------
 
-def _solve_scipy(
-    problem: ILPProblem,
-    time_limit_s: float | None,
-    mip_gap: float | None,
-) -> tuple[np.ndarray, str, float | None]:
-    """Solve with SciPy milp (HiGHS). Returns (solution, status, objective)."""
-    from scipy.optimize import Bounds, LinearConstraint, milp
-    from scipy.sparse import csc_array
-
-    A_eq = csc_array(
-        (problem.eq_data, (problem.eq_rows, problem.eq_cols)),
-        shape=(problem.n_eq, problem.n_vars),
-    )
-    b_eq = np.zeros(problem.n_eq)
-
-    constraints = [LinearConstraint(A_eq, b_eq, b_eq)]
-
-    if problem.n_ub > 0:
-        A_ub = csc_array(
-            (problem.ub_data, (problem.ub_rows, problem.ub_cols)),
-            shape=(problem.n_ub, problem.n_vars),
-        )
-        b_ub = np.zeros(problem.n_ub)
-        constraints.append(LinearConstraint(A_ub, -np.inf, b_ub))
-
-    bounds = Bounds(lb=problem.lb, ub=problem.ub)
-    integrality = np.ones(problem.n_vars)
-
-    options: dict = {}
-    if time_limit_s is not None:
-        options["time_limit"] = time_limit_s
-    if mip_gap is not None:
-        options["mip_rel_gap"] = mip_gap
-
-    result = milp(
-        c=problem.cost,
-        constraints=constraints,
-        integrality=integrality,
-        bounds=bounds,
-        options=options if options else None,
-    )
-
-    if not result.success:
-        raise RuntimeError(f"ILP extraction failed (scipy): {result.message}")
-
-    sol = np.round(result.x).astype(int)
-    return sol, "optimal", float(result.fun)
-
-
-# ---------------------------------------------------------------------------
-# OR-Tools / SCIP solver
-# ---------------------------------------------------------------------------
-
-def _solve_ortools_scip(
+def _solve_scip(
     problem: ILPProblem,
     time_limit_s: float | None,
     mip_gap: float | None,
 ) -> tuple[np.ndarray, str, float | None]:
     """Solve with OR-Tools SCIP backend. Returns (solution, status, objective)."""
-    try:
-        from ortools.linear_solver import pywraplp
-    except ImportError:
-        raise RuntimeError(
-            "OR-Tools is not installed. Install with: "
-            "pip install ortools"
-        )
-
     solver = pywraplp.Solver.CreateSolver("SCIP")
     if solver is None:
-        raise RuntimeError(
-            "SCIP solver not available in OR-Tools. "
-            "Install with: pip install ortools"
-        )
+        raise RuntimeError("SCIP solver not available in OR-Tools")
 
     if time_limit_s is not None:
         solver.SetTimeLimit(int(time_limit_s * 1000))
 
-    # MIP gap: OR-Tools SCIP exposes this via solver parameters.
     if mip_gap is not None:
-        # SCIP parameter for relative gap
         solver.SetSolverSpecificParametersAsString(
             f"limits/gap = {mip_gap}"
         )
@@ -373,7 +305,7 @@ def _solve_ortools_scip(
 
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
         raise RuntimeError(
-            f"ILP extraction failed (ortools_scip): {status_str}"
+            f"ILP extraction failed: {status_str}"
         )
 
     sol = np.array([int(v.solution_value()) for v in variables])
@@ -382,7 +314,7 @@ def _solve_ortools_scip(
 
 
 # ---------------------------------------------------------------------------
-# IRGraph reconstruction (unchanged)
+# IRGraph reconstruction
 # ---------------------------------------------------------------------------
 
 def _build_node_from_choices(
@@ -439,21 +371,19 @@ def extract_ilp(
     cost_model: CostModel,
     blacklist: set[int] | None = None,
     soft_legalization: bool = True,
-    solver: str = "scipy",
-    time_limit_s: float | None = None,
+    time_limit_s: float | None = 600,
     mip_gap: float | None = None,
 ) -> tuple[IRGraph, ILPStats]:
-    """Extract the globally optimal program via ILP.
+    """Extract the globally optimal program via ILP (SCIP solver).
 
     Returns (ir_graph, stats).
 
     Parameters
     ----------
-    solver : "scipy" | "ortools_scip"
     soft_legalization : if True, illegal enodes get high cost but remain
         selectable. If False, illegal enodes are removed when a legal
         alternative exists in the same e-class.
-    time_limit_s : solver time limit in seconds (None = no limit).
+    time_limit_s : solver time limit in seconds (default 600).
     mip_gap : relative MIP gap tolerance (None = solver default).
     """
     if blacklist is None:
@@ -469,7 +399,6 @@ def extract_ilp(
     total_enodes = sum(len(v) for v in problem.eclass_enodes.values())
 
     stats = ILPStats(
-        solver=solver,
         reachable_eclasses=len(problem.reachable),
         candidate_enodes=total_enodes,
         variables=problem.n_vars,
@@ -491,12 +420,7 @@ def extract_ilp(
 
     # Solve.
     t_solve = time.monotonic()
-    if solver == "scipy":
-        sol, status, obj_val = _solve_scipy(problem, time_limit_s, mip_gap)
-    elif solver == "ortools_scip":
-        sol, status, obj_val = _solve_ortools_scip(problem, time_limit_s, mip_gap)
-    else:
-        raise ValueError(f"unknown ILP solver: {solver!r} (use 'scipy' or 'ortools_scip')")
+    sol, status, obj_val = _solve_scip(problem, time_limit_s, mip_gap)
     solve_time = time.monotonic() - t_solve
 
     stats.solve_time_s = round(solve_time, 4)
