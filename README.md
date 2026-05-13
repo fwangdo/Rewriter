@@ -88,14 +88,8 @@ ILP soft extraction에서 확인한 legal 결과:
 
 ## Evaluation
 
-Correctness와 latency는 ONNX Runtime CPU 기준으로 측정한다.
-
-- `intra_op_num_threads=1`
-- `inter_op_num_threads=1`
-- `ORT_SEQUENTIAL`
-- deterministic input generation
-- domain별 tolerance
-- median latency
+Correctness와 ONNX Runtime CPU 기준으로 측정하며, performance는 graph에 존재하는 노드 수를 기준으로 한다. 
+지원되지 않는 op가 그래프에 존재하는 경우, 해당 op의 수들을 통해 cost를 계산한다. 
 
 주요 metric:
 
@@ -103,7 +97,6 @@ Correctness와 latency는 ONNX Runtime CPU 기준으로 측정한다.
 | --- | --- |
 | Contract result | unsupported op가 남았는지 |
 | Correctness | output count, shape, dtype, value tolerance |
-| Latency | original / rule baseline / ORT optimizer / superopt candidate 비교 |
 | Estimated cost | extraction heuristic 값. 최종 성능값으로 보지 않는다. |
 
 ## Usage
