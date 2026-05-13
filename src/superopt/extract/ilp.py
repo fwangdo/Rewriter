@@ -65,8 +65,8 @@ from ortools.linear_solver import pywraplp
 
 from ..egraph.egraph import EGraph
 from ..egraph.enode import EClassId, ENode
-from ..ir.graph import IRGraph
-from ..ir.node import IRNode
+from src.common.ir.graph import IRGraph
+from src.common.ir.node import IRNode
 from .cost import CostModel
 
 logger = logging.getLogger(__name__)

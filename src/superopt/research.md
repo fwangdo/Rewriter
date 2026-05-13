@@ -173,7 +173,24 @@ Optimized ONNX model
   - ORT latency (vs 원본, vs baseline rewrite)
 ```
 
-### 2.3 디렉토리 구조
+### 2.3 Proposed Extension: Summary-Guided Lazy Instantiation
+
+기본 e-graph는 유사한 graph pattern을 묶는 구조가 아니다.  e-class는
+하나의 tensor value를 표현하는 등가 e-node들의 집합이어야 하며, 이
+invariant가 깨지면 extraction이 원래 graph dependency를 복원할 수 없다.
+
+따라서 반복되는 `MatMul`, `Conv-BN`, `Reshape-Transpose` 같은 유사 구조를
+직접 같은 e-class로 merge하지 않는다.  대신 여러 concrete e-class가 같은
+abstract summary를 참조하도록 한다.  summary는 op/pattern, shape relation,
+constness, attrs처럼 rewrite applicability를 판단하는 조건만 보유하고,
+실제 e-node는 특정 concrete binding이 필요할 때 lazy하게 instantiate한다.
+
+이 접근은 semantic e-class invariant를 유지하면서도 동일한 rewrite family를
+반복 확장하는 비용을 줄이는 방향이다.  extraction은 여전히 concrete e-class
+graph 위에서 수행하고, summary는 candidate generation과 legality/cache 계층으로만
+사용한다.
+
+### 2.4 디렉토리 구조
 
 ```
 src/
@@ -218,9 +235,9 @@ src/
     └── eval_superopt.py      # correctness / latency 측정 CLI
 ```
 
-### 2.4 모듈별 설계
+### 2.5 모듈별 설계
 
-#### 2.4.1 IR (`ir/`)
+#### 2.5.1 IR (`ir/`)
 
 ONNX protobuf를 직접 e-graph에 넣으면 너무 복잡하다.
 중간 IR을 거쳐야 한다.
@@ -254,7 +271,7 @@ ONNX → IR 변환 시:
 - Constant node는 initializer로 fold
 - graph output을 noop node로 합침
 
-#### 2.4.2 E-Graph (`egraph/`)
+#### 2.5.2 E-Graph (`egraph/`)
 
 egg (Rust)를 Python으로 포팅하거나, Python binding을 쓸 수 있다.
 초기에는 **순수 Python 구현**으로 시작한다.
@@ -285,7 +302,7 @@ class EGraph:
 - `rebuild()`: merge 후 memo와 analysis를 재정합. (egg의 핵심 연산)
 - `find(id) → EClassId`: canonical e-class id 반환.
 
-#### 2.4.3 E-Class Analysis (`egraph/analysis.py`)
+#### 2.5.3 E-Class Analysis (`egraph/analysis.py`)
 
 Tensat은 e-class마다 shape/layout/split 정보를 붙인다.
 우리도 동일하게 한다.
@@ -301,7 +318,7 @@ class AnalysisData:
 analysis는 e-node의 children analysis로부터 bottom-up으로 계산한다.
 merge 시 두 analysis를 join한다 (shape이 같아야 함, 다르면 conflict).
 
-#### 2.4.4 Pattern Matching (`egraph/pattern.py`)
+#### 2.5.4 Pattern Matching (`egraph/pattern.py`)
 
 Tensat은 S-expression 패턴을 쓴다. 우리도 비슷하게 간다.
 
@@ -322,7 +339,7 @@ Pattern = PatternVar | PatternNode
 matching은 e-graph를 순회하며 pattern을 e-class 단위로 매칭한다.
 match 결과는 `dict[str, EClassId]` (variable → e-class binding).
 
-#### 2.4.5 Rewrite Rules (`rules/`)
+#### 2.5.5 Rewrite Rules (`rules/`)
 
 ```python
 @dataclass
@@ -367,7 +384,7 @@ GELU_exact(x) → GELU_tanh(x)
 legalization rule은 기존 `onnx_rewrite/passes/`의 rule과 의미적으로 동일하지만,
 e-graph rule 형태로 인코딩한다는 차이가 있다.
 
-#### 2.4.6 Exploration (`explore/`)
+#### 2.5.6 Exploration (`explore/`)
 
 ```python
 def explore(
@@ -402,7 +419,7 @@ cycle filtering은 Tensat의 efficient variant를 구현한다:
 2. pre-filtering: match가 cycle을 만드는지 descendant map으로 빠르게 검증
 3. post-processing: DFS로 실제 cycle을 찾아 filter list에 추가
 
-#### 2.4.7 Extraction (`extract/`)
+#### 2.5.7 Extraction (`extract/`)
 
 **Greedy extraction**:
 ```python
@@ -441,7 +458,7 @@ cost(i) = runtime(i) + λ · 𝟙[op(i) ∉ supported_ops]
 
 초기에는 **Greedy + hard filter** (supported op 아닌 e-node는 선택 후보에서 제외)로 시작한다.
 
-#### 2.4.8 Cost Model (`extract/cost.py`)
+#### 2.5.8 Cost Model (`extract/cost.py`)
 
 ```python
 class CostModel:
@@ -459,7 +476,7 @@ class CostModel:
 
 후기에는 ORT profiling 기반 learned cost model로 교체 가능.
 
-#### 2.4.9 Pipeline (`pipeline.py`)
+#### 2.5.9 Pipeline (`pipeline.py`)
 
 ```python
 def superoptimize(
@@ -493,7 +510,7 @@ def superoptimize(
     return SuperoptResult(...)
 ```
 
-#### 2.4.10 Evaluation (`eval_superopt.py`)
+#### 2.5.10 Evaluation (`eval_superopt.py`)
 
 기존 `onnx_rewrite/runtime/`의 validation/benchmark 코드를 재사용한다.
 

@@ -93,7 +93,7 @@ strict `LLM_SUPPORTED_OPS` legality는 baseline 이후 별도 축으로 남아 �
 ### 1. audit only
 
 ```bash
-python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
+python3.11 -m src.deprecated.run_onnx_rewrite \
   --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
   --audit-only
 ```
@@ -101,7 +101,7 @@ python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
 ### 2. rewrite
 
 ```bash
-python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
+python3.11 -m src.deprecated.run_onnx_rewrite \
   --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
   --output artifacts/rewrite/mobilenetv2.onnx
 ```
@@ -109,7 +109,7 @@ python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
 ### 3. rewrite + correctness + latency
 
 ```bash
-python3.11 -m src.onnx_rewrite.eval_rewrite \
+python3.11 -m src.deprecated.eval_rewrite \
   --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
   --output artifacts/rewrite/mobilenetv2.onnx \
   --report artifacts/rewrite/mobilenetv2_eval.json

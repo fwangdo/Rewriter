@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.onnx_rewrite.runtime.validation import _make_session, build_inputs_for_model
+from src.deprecated.runtime.validation import _make_session, build_inputs_for_model
 
 
 def parse_args() -> argparse.Namespace:

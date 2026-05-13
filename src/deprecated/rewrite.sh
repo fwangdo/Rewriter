@@ -9,6 +9,6 @@ OUTPUT_PATH="$ROOT_DIR/artifacts/front_rewrite/bert_tiny.onnx"
 
 cd "$ROOT_DIR"
 
-.venv/bin/python3 -m front.onnx_rewrite.run_onnx_rewrite \
+.venv/bin/python3 -m src.deprecated.run_onnx_rewrite \
   --input "$INPUT_PATH" \
   --output "$OUTPUT_PATH"

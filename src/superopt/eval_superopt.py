@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Correctness check.
     if args.correctness:
-        from ..onnx_rewrite.runtime.validation import compare_models
+        from ..deprecated.runtime.validation import compare_models
 
         val = compare_models(args.model, output_path)
         report["correctness"] = {
@@ -99,8 +99,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # Latency comparison.
     if args.latency:
-        from ..onnx_rewrite.runtime.benchmark import measure_latency
-        from ..onnx_rewrite.runtime.validation import build_inputs_for_model
+        from ..deprecated.runtime.benchmark import measure_latency
+        from ..deprecated.runtime.validation import build_inputs_for_model
 
         inputs = build_inputs_for_model(args.model)
         lat_before = measure_latency(args.model, inputs)

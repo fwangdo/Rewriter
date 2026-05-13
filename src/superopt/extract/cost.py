@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from ..egraph.enode import ENode
-from ..ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
+from src.common.ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
 # Ops that are structural/boundary — zero cost.
 _FREE_OPS = frozenset({
