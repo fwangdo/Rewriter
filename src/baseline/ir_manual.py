@@ -17,7 +17,7 @@ import numpy as np
 import onnx
 
 from src.common.rules import RuleSpec, get_all_specs
-from src.common.rules.spec import VarCheck
+from src.common.rules.spec import GraphBuilder, VarCheck
 from src.superopt.egraph.pattern import PatternNode, PatternVar
 
 from src.common.compat import run_post_passes, run_pre_passes
@@ -287,7 +287,7 @@ def _prune_dead_ir(ir: IRGraph) -> None:
     return 
 
 
-class IRRewriteBuilder:
+class IRRewriteBuilder(GraphBuilder):
     """GraphBuilder adapter that emits IR nodes and initializers."""
 
     def __init__(self, ir: IRGraph, source_id: str, subst: dict[str, str]) -> None:

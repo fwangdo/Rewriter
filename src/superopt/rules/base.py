@@ -70,7 +70,7 @@ def check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> bo
     return True
 
 
-class EGraphBuilder:
+class EGraphBuilder(GraphBuilder):
     """GraphBuilder implementation for the hand-rolled e-graph."""
 
     def __init__(self, egraph: EGraph, match_cid: EClassId, subst: Subst) -> None:

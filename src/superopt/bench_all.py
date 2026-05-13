@@ -10,6 +10,8 @@ from pathlib import Path
 
 import onnx
 
+from src.common.validation.correctness import validate_correctness
+
 # (domain, name, max_iter, max_nodes)
 MODELS = [
     ("nlp", "tinyllama_15m", 15, 50_000),
@@ -47,14 +49,35 @@ def get_supported_ops(domain: str):
     return LLM_SUPPORTED_OPS if domain == "nlp" else VISION_SUPPORTED_OPS
 
 
-def run_baseline(model_path: str, domain: str):
+def _make_rewritten_model_path(root: Path, model_name: str, mode: str) -> Path:
+    output_path = root / "artifacts" / mode / f"{model_name}.onnx"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path
+
+
+def _correctness_summary(result: dict[str, object] | None) -> str:
+    if result is None:
+        return "-"
+    if result.get("ok"):
+        max_abs = result.get("max_abs_diff")
+        return f"OK({max_abs:.2e})" if isinstance(max_abs, float) else "OK"
+    stage = result.get("stage", "?")
+    return f"FAIL({stage})"
+
+
+def _validate_candidate(
+    original_path: str | Path,
+    candidate_path: str | Path,
+    domain: str,
+) -> dict[str, object]:
+    return validate_correctness(original_path, candidate_path, domain)
+
+
+def run_baseline(model_path: str, output_path: Path, domain: str):
     """Run IR-based fair baseline pipeline, return op counts."""
     from src.baseline.ir_manual import optimize_ir_baseline
 
     t0 = time.time()
-    model_name = Path(model_path).parent.parent.name
-    output_path = Path("artifacts/superopt") / f"{model_name}_ir_baseline.onnx"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     optimize_ir_baseline(model_path, output_path)
     elapsed = time.time() - t0
 
@@ -68,6 +91,7 @@ def run_baseline(model_path: str, domain: str):
         "illegal_count": sum(illegal.values()),
         "ops": dict(sorted(ops.items())),
         "time_s": round(elapsed, 2),
+        "output_path": str(output_path),
     }
 
 
@@ -101,6 +125,7 @@ def run_superopt(model_path: str, output_path: str, domain: str,
         "explore_iters": result.explore_stats.iterations,
         "explore_matches": result.explore_stats.total_matches,
         "explore_applied": result.explore_stats.total_applied,
+        "output_path": str(output_path),
     }
     if result.ilp_stats is not None:
         out["ilp_stats"] = asdict(result.ilp_stats)
@@ -114,8 +139,8 @@ def main():
 
     for domain, name, max_iter, max_nodes in MODELS:
         model_path = root / f"benchmarks/onnx/{domain}/{name}/onnx/model.onnx"
-        output_path = root / f"artifacts/superopt/{name}.onnx"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        baseline_path = _make_rewritten_model_path(root, name, "baseline")
+        superopt_path = _make_rewritten_model_path(root, name, "superopt")
 
         if not model_path.exists():
             print(f"SKIP {name}: model not found at {model_path}")
@@ -126,24 +151,36 @@ def main():
         print(f"{'='*60}")
 
         bl = None
+        bl_correctness = None
         if args.mode in ("baseline", "comp"):
             print("  [baseline] running...")
             try:
-                bl = run_baseline(str(model_path), domain)
-                print(f"  [baseline] {bl['total_ops']} ops, {bl['illegal_count']} illegal, {bl['time_s']}s")
+                bl = run_baseline(str(model_path), baseline_path, domain)
+                bl_correctness = _validate_candidate(model_path, baseline_path, domain)
+                print(
+                    f"  [baseline] {bl['total_ops']} ops, "
+                    f"{bl['illegal_count']} illegal, {bl['time_s']}s, "
+                    f"correctness={_correctness_summary(bl_correctness)}"
+                )
             except Exception as e:
                 import traceback
                 print(f"  [baseline] FAILED: {e}")
                 traceback.print_exc()
 
         so = None
+        so_correctness = None
         if args.mode in ("superopt", "comp"):
             print("  [superopt] running...")
             try:
-                so = run_superopt(str(model_path), str(output_path), domain,
+                so = run_superopt(str(model_path), str(superopt_path), domain,
                                   max_iter=max_iter, max_nodes=max_nodes,
                                   ilp_time_limit_s=args.ilp_time_limit)
-                print(f"  [superopt] {so['total_ops']} ops, {so['illegal_count']} illegal, {so['time_s']}s")
+                so_correctness = _validate_candidate(model_path, superopt_path, domain)
+                print(
+                    f"  [superopt] {so['total_ops']} ops, "
+                    f"{so['illegal_count']} illegal, {so['time_s']}s, "
+                    f"correctness={_correctness_summary(so_correctness)}"
+                )
             except Exception as e:
                 import traceback
                 print(f"  [superopt] FAILED: {e}")
@@ -156,6 +193,8 @@ def main():
             "mode": args.mode,
             "baseline": bl,
             "superopt": so,
+            "baseline_correctness": bl_correctness,
+            "superopt_correctness": so_correctness,
         })
 
     # Dump raw JSON for report generation
@@ -166,9 +205,13 @@ def main():
     print(f"\nResults saved to {out_json}")
 
     # Print summary table
-    print(f"\n{'='*80}")
-    print(f"{'Model':<20} {'Contract':<20} {'Baseline':>10} {'Superopt':>10} {'Delta':>8} {'BL illegal':>12} {'SO illegal':>12}")
-    print(f"{'-'*80}")
+    print(f"\n{'='*160}")
+    print(
+        f"{'Model':<20} {'Contract':<20} {'Baseline':>10} {'Superopt':>10} "
+        f"{'Delta':>8} {'BL illegal':>12} {'SO illegal':>12} "
+        f"{'BL correct':>14} {'SO correct':>14}"
+    )
+    print(f"{'-'*160}")
     for r in results:
         bl = r["baseline"]
         so = r["superopt"]
@@ -180,8 +223,14 @@ def main():
             delta = f"{d:+d}"
         bl_ill = bl["illegal_count"] if bl else "-"
         so_ill = so["illegal_count"] if so else "-"
-        print(f"{r['name']:<20} {r['contract']:<20} {bl_ops:>10} {so_ops:>10} {delta:>8} {bl_ill:>12} {so_ill:>12}")
-    print(f"{'='*80}")
+        bl_corr = _correctness_summary(r["baseline_correctness"])
+        so_corr = _correctness_summary(r["superopt_correctness"])
+        print(
+            f"{r['name']:<20} {r['contract']:<20} {bl_ops:>10} {so_ops:>10} "
+            f"{delta:>8} {bl_ill:>12} {so_ill:>12} "
+            f"{bl_corr:>14} {so_corr:>14}"
+        )
+    print(f"{'='*160}")
 
 
 if __name__ == "__main__":

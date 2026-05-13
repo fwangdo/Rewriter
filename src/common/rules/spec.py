@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 import numpy as np
 from src.superopt.egraph.pattern import Pattern
@@ -33,34 +34,50 @@ class VarCheck:
     has_shape: bool | None = None  # shape 정보가 존재하는지 여부
 
 
-class GraphBuilder(Protocol):
+class GraphBuilder(ABC):
     """Backend-independent graph synthesis surface for complex rules."""
 
+    @abstractmethod
     def add_op(
         self,
         op: str,
         inputs: list[Any],
         attrs: dict[str, Any] | None = None,
-    ) -> Any: ...
+    ) -> Any:
+        raise NotImplementedError
 
-    def add_scalar(self, value: float, name: str = "") -> Any: ...
+    @abstractmethod
+    def add_scalar(self, value: float, name: str = "") -> Any:
+        raise NotImplementedError
 
+    @abstractmethod
     def add_array(
         self,
         arr: np.ndarray,
         name: str,
         dtype_code: int = 1,
-    ) -> Any: ...
+    ) -> Any:
+        raise NotImplementedError
 
-    def get_weight_data(self, var: str) -> np.ndarray | None: ...
+    @abstractmethod
+    def get_weight_data(self, var: str) -> np.ndarray | None:
+        raise NotImplementedError
 
-    def get_shape(self, var: str) -> tuple[int, ...] | None: ...
+    @abstractmethod
+    def get_shape(self, var: str) -> tuple[int, ...] | None:
+        raise NotImplementedError
 
-    def get_matched_shape(self) -> tuple[int, ...] | None: ...
+    @abstractmethod
+    def get_matched_shape(self) -> tuple[int, ...] | None:
+        raise NotImplementedError
 
-    def get_matched_attr(self, key: str) -> Any: ...
+    @abstractmethod
+    def get_matched_attr(self, key: str) -> Any:
+        raise NotImplementedError
 
-    def get_match(self) -> Any: ...
+    @abstractmethod
+    def get_match(self) -> Any:
+        raise NotImplementedError
 
 
 BuildFn = Callable[[GraphBuilder, dict[str, Any]], Any]
