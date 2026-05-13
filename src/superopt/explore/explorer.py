@@ -83,8 +83,9 @@ def explore(
                 egraph, match.rule, match.eclass_id, match.subst, desc_map
             ):
                 continue
+            before_version = egraph.version
             result = apply_rule(egraph, match.rule, match.eclass_id, match.subst)
-            if result is not None:
+            if result is not None and egraph.version != before_version:
                 applied += 1
 
         stats.total_applied += applied
@@ -94,6 +95,11 @@ def explore(
 
         # 4. Layer 2: post-process to remove any cycles that slipped through
         remove_cycles(egraph, root_cid, blacklist)
+
+        if applied == 0:
+            stats.saturated = True
+            logger.info("exploration saturated at iteration %d", iteration)
+            break
 
     stats.final_eclasses = len(egraph)
     stats.final_enodes = egraph.num_enodes

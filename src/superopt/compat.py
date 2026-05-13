@@ -21,9 +21,6 @@ def run_pre_passes(model: onnx.ModelProto) -> onnx.ModelProto:
     as e-graph rewrite rules due to pattern depth.
     """
     model, _ = ConstantFolding().run(model)
-    # model, _ = RewriteDecoderMask().run(model)
-    # model, _ = RewriteTrilu().run(model)
-    # model, _ = ConstantFolding().run(model)
     return model
 
 

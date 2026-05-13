@@ -31,6 +31,7 @@ class EGraph:
         # counters
         self._next_class_id: int = 0
         self._next_node_id: int = 0
+        self._version: int = 0
         # pending merges for rebuild
         self._pending: list[EClassId] = [] # worklist. 
         # initializer data: weight node name → numpy array
@@ -68,6 +69,7 @@ class EGraph:
         for child_cid in canon.children:
             self._classes[self.find(child_cid)].parents.add(nid)
 
+        self._version += 1
         return cid
 
     def merge(self, id1: EClassId, id2: EClassId) -> EClassId:
@@ -89,6 +91,7 @@ class EGraph:
         for nid in c2.nodes:
             self._node_to_class[nid] = id1
         self._pending.append(id1)
+        self._version += 1
         return id1
 
     def find(self, cid: EClassId) -> EClassId:
@@ -178,6 +181,11 @@ class EGraph:
     @property
     def num_enodes(self) -> int:
         return len(self._nodes)
+
+    @property
+    def version(self) -> int:
+        """Monotonic counter bumped when add/merge changes e-graph structure."""
+        return self._version
 
     def eclass(self, cid: EClassId) -> EClass:
         return self._classes[self.find(cid)]

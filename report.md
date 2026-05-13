@@ -22,10 +22,23 @@
 | pythia_70m | 624 | 0 | 687 | 0 | +63 | feasible |
 | smollm_135m | 3167 | 1 (Trilu 1) | 3250 | 0 | +83 | feasible |
 
+## E-graph 규모
+
+| Model | e-classes | e-nodes | e-node / e-class |
+|-------|-----------|---------|------------------|
+| mobilenetv2 | 186 | 280 | 1.51 |
+| yolo26_nano | 673 | 999 | 1.48 |
+| tinyllama_15m | 1,227 | 1,819 | 1.48 |
+| mobilevit_xxs | 11,642 | 50,000 | 4.29 |
+| pythia_70m | 14,255 | 49,931 | 3.50 |
+| smollm_135m | 20,234 | 49,382 | 2.44 |
+
 ## 해석
 
 Superopt는 6개 모델 모두에서 illegal op 없이 출력 ONNX를 만든다. Baseline은 `yolo26_nano`와 `smollm_135m`에서 illegal op가 남는다.
 
 Node count만 보면 Superopt는 `mobilenetv2`, `yolo26_nano`, `tinyllama_15m`에서 Baseline보다 작고, `mobilevit_xxs`, `pythia_70m`, `smollm_135m`에서는 더 크다. 즉 현재 결과는 "항상 더 작은 graph"라기보다, ILP extraction을 통해 legality를 전역적으로 만족시키는 쪽에 강점이 있다.
+
+작은 모델은 e-class당 e-node가 약 1.5개 수준이라 rewrite 후보 분기가 크지 않다. 반면 큰 모델은 2.4-4.3개 수준까지 늘어나며, 특히 `max_nodes=50000` 제한에 닿은 모델은 더 많은 후보가 생성될 여지가 있다.
 
 `feasible`은 제한 시간 안에 legal 해를 찾았지만 최적성 증명까지 끝나지는 않았다는 뜻이다. 따라서 해당 모델들의 node count는 더 개선될 여지가 있다.
