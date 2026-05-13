@@ -29,6 +29,7 @@ benchmarks/onnx/
 *.log
 *.pdf
 artifacts/
+paper/
 # LaTeX build artifacts
 *.aux
 *.bbl
