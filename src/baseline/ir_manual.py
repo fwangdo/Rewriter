@@ -20,11 +20,10 @@ from src.common.rules import RuleSpec, get_all_specs
 from src.common.rules.spec import VarCheck
 from src.superopt.egraph.pattern import PatternNode, PatternVar
 
-from .compat import run_post_passes, run_pre_passes
-from .ir.convert import ir_to_onnx, onnx_to_ir
-from .ir.graph import IRGraph
-from .ir.node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
-from .rules.base import check_vars
+from src.common.compat import run_post_passes, run_pre_passes
+from src.common.ir.convert import ir_to_onnx, onnx_to_ir
+from src.common.ir.graph import IRGraph
+from src.common.ir.node import IRNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
 logger = logging.getLogger(__name__)
 

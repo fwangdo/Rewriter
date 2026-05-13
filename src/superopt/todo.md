@@ -177,9 +177,9 @@ superopt 제품 파이프라인으로 어떻게 연결하는지 보는 순서로
      ONNX 저장이 어떤 순서로 이어지는지 잡는다.
 
 2. IR 레이어
-   - `src/superopt/ir/node.py`
-   - `src/superopt/ir/graph.py`
-   - `src/superopt/ir/convert.py`
+   - `src/common/ir/node.py`
+   - `src/common/ir/graph.py`
+   - `src/common/ir/convert.py`
    - 목표: ONNX graph를 e-graph에 넣기 전 어떤 중간 표현으로 낮추는지 본다.
    - 여기서 node id, inputs, attrs, shape, dtype, initializer 처리 방식을 이해한다.
 

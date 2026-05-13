@@ -108,12 +108,20 @@ python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Rule-based ONNX rewrite:
+Deprecated ONNX-level rewrite:
 
 ```bash
-python3.11 -m src.onnx_rewrite.run_onnx_rewrite \
+python3.11 -m src.deprecated.run_onnx_rewrite \
   --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
   --output artifacts/rewrite/mobilenetv2.onnx
+```
+
+IR manual baseline:
+
+```bash
+python3.11 -m src.baseline.ir_manual \
+  --input benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
+  --output artifacts/superopt/mobilenetv2_ir_baseline.onnx
 ```
 
 Superopt:

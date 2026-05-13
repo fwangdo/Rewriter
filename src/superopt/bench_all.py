@@ -49,7 +49,7 @@ def get_supported_ops(domain: str):
 
 def run_baseline(model_path: str, domain: str):
     """Run IR-based fair baseline pipeline, return op counts."""
-    from src.superopt.baseline import optimize_ir_baseline
+    from src.baseline.ir_manual import optimize_ir_baseline
 
     t0 = time.time()
     model_name = Path(model_path).parent.parent.name

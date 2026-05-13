@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import onnx
 
-from .compat import run_post_passes, run_pre_passes
 from .contracts import Contract, check_contract
 from .egraph.eclass import AnalysisData
 from .egraph.egraph import EGraph
@@ -22,10 +21,11 @@ from .egraph.enode import EClassId, ENode
 from .explore.explorer import explore, ExploreStats
 from .extract.cost import CostModel
 from .extract.ilp import ILPStats, extract_ilp
-from .ir.convert import ir_to_onnx, onnx_to_ir
-from .ir.graph import IRGraph
-from .ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 
+from src.common.compat import run_post_passes, run_pre_passes
+from src.common.ir.convert import ir_to_onnx, onnx_to_ir
+from src.common.ir.graph import IRGraph
+from src.common.ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 from src.common.rules import get_all_specs
 
 #.. 

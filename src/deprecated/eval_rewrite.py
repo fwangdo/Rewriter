@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.onnx_rewrite import (
+from src.deprecated import (
     OptimizationResult,
     build_inputs_for_model,
     compare_models,
     measure_latency,
 )
-from src.onnx_rewrite.run_onnx_rewrite import default_output_path, resolve_input_path, run_rewrite
-from src.onnx_rewrite.utils.io import write_json
+from src.deprecated.run_onnx_rewrite import default_output_path, resolve_input_path, run_rewrite
+from src.deprecated.utils.io import write_json
 
 
 @dataclass(frozen=True)

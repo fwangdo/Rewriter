@@ -1,4 +1,4 @@
-"""Bridge to baseline onnx_rewrite passes.
+"""Bridge to deprecated ONNX-level rewrite passes.
 
 Provides pre-pass and post-pass functions that reuse existing passes
 for operations that are impractical as e-graph rules.
@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import onnx
 
-from src.onnx_rewrite.passes.constant_folding import ConstantFolding
-from src.onnx_rewrite.passes.cleanup import Cleanup
-from src.onnx_rewrite.passes.rewrite_decoder_mask import RewriteDecoderMask
-from src.onnx_rewrite.passes.rewrite_trilu import RewriteTrilu
+from src.deprecated.passes.constant_folding import ConstantFolding
+from src.deprecated.passes.cleanup import Cleanup
+from src.deprecated.passes.rewrite_decoder_mask import RewriteDecoderMask
+from src.deprecated.passes.rewrite_trilu import RewriteTrilu
 
 
 def run_pre_passes(model: onnx.ModelProto) -> onnx.ModelProto:

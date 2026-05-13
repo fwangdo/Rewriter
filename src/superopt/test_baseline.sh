@@ -8,7 +8,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="python3"
 fi
 
-"$PYTHON_BIN" -m src.superopt.baseline \
+"$PYTHON_BIN" -m src.baseline.ir_manual \
   -i benchmarks/onnx/vision/mobilenetv2/onnx/model.onnx \
   -o artifacts/superopt/mobilenetv2_ir_baseline.onnx \
   -v

@@ -35,7 +35,7 @@ ONNX model
 
 ### 1. ONNX를 IR로 변환
 
-`src/superopt/ir/convert.py`의 `onnx_to_ir()`가 ONNX graph를 `IRGraph`로 바꾼다.
+`src/common/ir/convert.py`의 `onnx_to_ir()`가 ONNX graph를 `IRGraph`로 바꾼다.
 
 `IRGraph`는 다음 정보를 가진 단순 DAG다.
 
