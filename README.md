@@ -1,31 +1,14 @@
 # Rewriter
 
-ONNX model을 target backend가 실행할 수 있는 graph로 낮추고, correctness와 latency를 기준으로 후보를 고르는 graph rewrite / superoptimization 프로젝트다.
+ONNX model을 target backend가 실행할 수 있는 graph로 변환하고, cost model을 기준으로 후보를 고르는 superoptimization 프로젝트.
 
-핵심 질문은 다음이다.
+본 프로젝트는 아래와 같은 문제를 해결하고자 한다. 
 
-> 지원 가능한 operator 집합이 제한된 backend에서, ONNX graph를 의미적으로 동등하면서 더 실행하기 좋은 형태로 바꿀 수 있는가?
+> ONNX graph를 지원 가능한 operator로 변환할 때 변환 규칙을 어떤 순서로 적용하는지를 자동으로 알 수 있는 방법은 없는가?
 
-일반적인 ONNX optimizer는 보통 실행 가능한 backend를 이미 가정하고 성능 최적화에 집중한다. 이 프로젝트는 그보다 앞단의 문제를 다룬다. NPU, edge runtime, vendor compiler, 제한된 inference runtime처럼 지원 op set이 좁거나 계속 바뀌는 환경에서 graph를 target contract에 맞게 legalize하고, 가능한 후보 중 실제로 맞고 빠른 것을 선택한다.
-
-## Goals
-
-- ONNX graph를 읽고 rewrite candidate를 생성한다.
-- target backend의 supported-op contract를 모델링한다.
-- rewrite 결과가 원본과 같은 출력을 내는지 ONNX Runtime으로 검증한다.
-- cost model은 최종 답이 아니라 candidate ranking heuristic으로만 사용한다.
-- 최종 선택은 checker, contract, ORT load, correctness, measured latency를 통과한 후보 중에서 한다.
-- 더 나은 후보가 없으면 원본 또는 baseline을 유지하는 것도 정상 결과로 본다.
+일반적인 ONNX optimizer는 보통 실행 가능한 backend를 이미 가정하고 성능 최적화에 집중한다. NPU, edge runtime, vendor compiler처럼 지원 op set이 좁거나 계속 바뀌는 환경에서 graph를 target contract에 맞게 legalize하고, 가능한 후보 중 실제로 맞고 빠른 것을 선택한다.
 
 ## Architecture
-
-코드는 세 축으로 나뉜다.
-
-| 경로 | 역할 |
-| --- | --- |
-| `src/common/rules` | 공유 rewrite 규칙. `get_all_specs()`로 42개 RuleSpec을 로드하며 baseline과 superopt 모두 이 함수를 단일 진실 공급원으로 사용한다. |
-| `src/onnx_rewrite` | rule-based baseline. ONNX 레벨에서 ConstantFolding → RuleRunner → Cleanup 파이프라인을 적용한다. |
-| `src/superopt` | e-graph 기반 superopt. ONNX를 IR로 낮추고, equality saturation으로 rewrite space를 탐색한 뒤 ILP extraction으로 candidate를 추출한다. |
 
 Superopt의 큰 흐름은 다음과 같다.
 
@@ -165,40 +148,11 @@ python3.11 -m src.superopt.run \
 Full benchmark (baseline + superopt, all models):
 
 ```bash
-python3.11 -m src.superopt.bench_all
+python3 -m src.superopt.bench_all
 ```
-
-## Current Status
-
-이 프로젝트는 production optimizer가 아니라, 현업형 문제 정의를 가진 research / portfolio prototype이다.
-
-잘 되어 있는 부분:
-
-- baseline과 superopt가 동일한 42개 RuleSpec을 공유한다 (`get_all_specs()`).
-- ONNX graph를 IR로 낮춘 뒤 다시 ONNX로 materialize하는 경로가 있다.
-- hand-rolled e-graph 기반 equality saturation을 main path로 사용한다.
-- extraction은 ILP 기반이며, 기본 backend는 SciPy/HiGHS다.
-- OR-Tools SCIP backend를 선택할 수 있도록 solver abstraction과 ILP stats를 추가했다.
-- 적절한 `max_nodes`에서는 6개 benchmark 모두 ILP superopt가 contract violation 없이 통과한다.
-- candidate를 실제 ORT correctness와 latency로 평가하는 방향이 잡혀 있다.
-- CPU budget은 single-thread / sequential ORT 실행을 기본으로 둔다.
-
-아직 닫아야 할 부분:
-
-- 큰 e-graph를 50k까지 키우면 ILP solver가 장시간 멈출 수 있다.
-- ILP backend별 solve time, variable/constraint 수, gap/status를 정량 비교해야 한다.
-- blacklisted/dead candidate 제거와 structural dominance pruning이 필요하다.
-- mobilevit_xxs, pythia_70m에서 saturation/ILP solve budget tuning이 필요하다.
-- original / pre-pass를 candidate 0으로 포함하는 fallback.
-- materialized graph hash dedup.
-- 자동 regression test suite.
 
 ## Related Work
 
 - **Tensat**: tensor graph superoptimization with equality saturation.
 - **egg**: e-graph / equality saturation library (Willsey et al., 2020).
 - **ONNX Runtime graph optimizer**: baseline optimizer and execution reference.
-
-## Project Thesis
-
-Graph rewrite는 단순히 op 수를 줄이는 작업이 아니다. 제한된 backend contract, numerical correctness, 실제 runtime latency 사이에서 실행 가능한 graph를 고르는 target adaptation 문제다.
