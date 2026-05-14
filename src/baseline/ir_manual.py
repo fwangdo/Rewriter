@@ -289,6 +289,7 @@ def _prune_dead_ir(ir: IRGraph) -> None:
 
 class IRRewriteBuilder(GraphBuilder):
     """GraphBuilder adapter that emits IR nodes and initializers."""
+    fallback_count = 0
 
     def __init__(self, ir: IRGraph, source_id: str, subst: dict[str, str]) -> None:
         self.ir = ir
@@ -372,6 +373,7 @@ class IRRewriteBuilder(GraphBuilder):
         return node.attrs_dict.get(key)
 
     def get_match(self) -> str:
+        IRRewriteBuilder.fallback_count += 1
         return self.source_id
 
     def get_opset_version(self) -> int:

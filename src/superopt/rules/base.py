@@ -73,6 +73,7 @@ def check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> bo
 
 class EGraphBuilder(GraphBuilder):
     """GraphBuilder implementation for the hand-rolled e-graph."""
+    fallback_count = 0 
 
     def __init__(self, egraph: EGraph, match_cid: EClassId, subst: Subst) -> None:
         self.egraph = egraph
@@ -178,6 +179,7 @@ class EGraphBuilder(GraphBuilder):
         return None
 
     def get_match(self) -> EClassId:
+        EGraphBuilder.fallback_count += 1 
         return self.match_cid
 
     def get_opset_version(self) -> int:

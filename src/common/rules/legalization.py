@@ -422,8 +422,8 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
     if any(data is None for data in (s_data, b_data, m_data, v_data)):
         return builder.get_match()
 
-    scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(np.float32) # type: ignore
-    bias_factor = (b_data - m_data * scale_factor).astype(np.float32) # type: ignore
+    scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(s_data.dtype) # type: ignore
+    bias_factor = (b_data - m_data * scale_factor).astype(b_data.dtype) # type: ignore
 
     x_shape = builder.get_shape("?x")
     if x_shape is not None and len(x_shape) == 4:
@@ -437,7 +437,6 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
     return builder.add_op("Add", [mul, bf])
 
 
-# TODO 
 def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Gemm(a, w, b) → Add(MatMul(a', w'), b').
     Gemm computes alpha * A @ B + beta * C with optional transposes.
@@ -452,7 +451,7 @@ def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obj
         return builder.get_match()
     if trans_b:
         w_data = w_data.T
-    w_data = (alpha * w_data).astype(np.float32)
+    w_data = (alpha * w_data).astype(w_data.dtype)
 
     if trans_a:
         a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
@@ -461,8 +460,9 @@ def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obj
     matmul = builder.add_op("MatMul", [a_value, w_new])
 
     b_data = builder.get_weight_data("?b")
+    # we dont have to consider beta when it is 1.0
     if b_data is not None and not _is_close(beta, 1.0):
-        b_data = (beta * b_data).astype(np.float32)
+        b_data = (beta * b_data).astype(b_data.dtype)
         b_value = builder.add_array(b_data, f"__gemm_bias_{id(b_data)}")
 
     return builder.add_op("Add", [matmul, b_value])
@@ -480,7 +480,7 @@ def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]
         return builder.get_match()
     if trans_b:
         w_data = w_data.T
-    w_data = (alpha * w_data).astype(np.float32)
+    w_data = (alpha * w_data).astype(w_data.dtype)
 
     if trans_a:
         a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
@@ -504,7 +504,7 @@ def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> obj
         return builder.get_match()
 
     k_size, n_size = w_data.shape
-    conv_weight = w_data.T.reshape(n_size, k_size, 1, 1).astype(np.float32)
+    conv_weight = w_data.T.reshape(n_size, k_size, 1, 1).astype(w_data.dtype)
     conv_w = builder.add_array(conv_weight, f"__matmul_conv_w_{id(conv_weight)}")
 
     reshape_in_shape = builder.add_array(np.array([1, 0, -1, 1], dtype=np.int64), "__reshape_10n11", dtype_code=7)
@@ -514,6 +514,8 @@ def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> obj
     reshape_out_shape = builder.add_array(np.array([-1, n_size], dtype=np.int64), f"__reshape_n1_{n_size}", dtype_code=7)
     return builder.add_op("Reshape", [t2, reshape_out_shape])
 
+
+# TODO: add matmul -> conv for 3d, 4d version. 
 
 def _build_shape_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Shape(x) → constant int64 tensor when shape is fully static."""
@@ -532,7 +534,7 @@ def _build_constantofshape_fold(
     shape_data = builder.get_weight_data("?shape")
     if shape_data is None:
         return builder.get_match()
-    target_shape = tuple(int(d) for d in shape_data.flat)
+    target_shape = tuple(int(d) for d in shape_data.flat) # flat == flatten. 
     if any(d < 0 for d in target_shape):
         return builder.get_match()
     # ConstantOfShape default value comes from the "value" attribute (scalar tensor).
@@ -564,6 +566,7 @@ def _build_constantofshape_fold(
     )
 
 
+# TODO.. 
 def _build_flatten_to_reshape(
     builder: GraphBuilder, vars: dict[str, object]
 ) -> object:
@@ -609,7 +612,7 @@ def _build_cos_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     data = builder.get_weight_data("?x")
     if data is None:
         return builder.get_match()
-    result = np.cos(data).astype(np.float32)
+    result = np.cos(data).astype(data.dtype)
     return builder.add_array(result, f"__cos_folded_{id(result)}")
 
 
@@ -618,7 +621,7 @@ def _build_sin_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     data = builder.get_weight_data("?x")
     if data is None:
         return builder.get_match()
-    result = np.sin(data).astype(np.float32)
+    result = np.sin(data).astype(data.dtype)
     return builder.add_array(result, f"__sin_folded_{id(result)}")
 
 
