@@ -293,7 +293,7 @@ class IRRewriteBuilder(GraphBuilder):
     def __init__(self, ir: IRGraph, source_id: str, subst: dict[str, str]) -> None:
         self.ir = ir
         self.source_id = source_id
-        self.subst = subst
+        self.subst = subst # substitution information. 
         self._index = 0
 
     def add_op(
@@ -302,22 +302,53 @@ class IRRewriteBuilder(GraphBuilder):
         inputs: list[Any],
         attrs: dict[str, Any] | None = None,
     ) -> str:
+        input_ids = tuple(_as_value_id(value) for value in inputs)
+        shape, dtype = self._infer_from_inputs(input_ids)
         output_id = self._fresh_value_id(op.lower())
         self.ir.add_node(
             IRNode(
                 id=output_id,
                 op=op,
-                inputs=tuple(_as_value_id(value) for value in inputs),
+                inputs=input_ids,
                 attrs=tuple((attrs or {}).items()),
+                shape=shape,
+                dtype=dtype,
             )
         )
         return output_id
 
-    def add_scalar(self, value: float, name: str = "") -> str:
+    def _infer_from_inputs(
+        self, input_ids: tuple[str, ...]
+    ) -> tuple[tuple[int, ...] | None, int | None]:
+        """Propagate shape/dtype from the first input that has them."""
+        shape = None
+        dtype = None
+        for iid in input_ids:
+            node = self.ir.nodes.get(iid)
+            if node is None:
+                continue
+            if shape is None and node.shape is not None:
+                shape = node.shape
+            if dtype is None and node.dtype is not None:
+                dtype = node.dtype
+            if shape is not None and dtype is not None:
+                break
+        return shape, dtype
+
+    def get_dtype(self, name: str) -> int | None:
+        return self.ir.nodes[self.subst[name]].dtype
+
+    def add_scalar(self, value: float, var: str, name: str = "") -> str:
+        dtype = self.get_dtype(var)
+        if dtype is None:
+            raise Exception(f'[ERROR]: dtype is None. var -> {var}')
+
+        np_dtype = onnx.helper.tensor_dtype_to_np_dtype(dtype)
+        arr = np.array(value, np_dtype)
         return self.add_array(
-            np.array(value, dtype=np.float32),
+            arr, 
             name=name or f"__const_{value}",
-            dtype_code=1,
+            dtype_code=dtype,
         )
 
     def add_array(

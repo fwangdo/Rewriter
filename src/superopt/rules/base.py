@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import onnx
 
 from src.common.rules.legalization import RuleSpec
 from src.common.rules.spec import VarCheck, GraphBuilder
@@ -84,17 +85,51 @@ class EGraphBuilder(GraphBuilder):
         inputs: list[Any],
         attrs: dict[str, Any] | None = None,
     ) -> EClassId:
-        return self.egraph.add(
+        input_cids = tuple(_as_cid(value) for value in inputs)
+        cid = self.egraph.add(
             ENode(
                 op,
-                tuple(_as_cid(value) for value in inputs),
+                input_cids,
                 attrs=tuple((attrs or {}).items()),
             )
         )
+        shape, dtype = self._infer_from_inputs(input_cids)
+        if shape is not None or dtype is not None:
+            self.egraph.update_analysis(
+                cid,
+                AnalysisData(shape=shape, dtype=dtype),
+            )
+        return cid
 
-    def add_scalar(self, value: float, name: str = "") -> EClassId:
-        arr = np.array(value, dtype=np.float32)
-        return self.add_array(arr, name=name or f"__const_{value}", dtype_code=1)
+    def _infer_from_inputs(
+        self, input_cids: tuple[EClassId, ...]
+    ) -> tuple[tuple[int, ...] | None, int | None]:
+        """Propagate shape/dtype from the first input that has them."""
+        shape = None
+        dtype = None
+        for c in input_cids:
+            data = self.egraph.eclass(c).data
+            if shape is None and data.shape is not None:
+                shape = data.shape
+            if dtype is None and data.dtype is not None:
+                dtype = data.dtype
+            if shape is not None and dtype is not None:
+                break
+        return shape, dtype
+
+    def get_dtype(self, var: str):
+        return self.egraph.eclass(self.subst[var]).data.dtype
+
+
+    def add_scalar(self, value: float, var: str, name: str = "") -> EClassId:
+        dtype = self.get_dtype(var)
+        if dtype is None:
+            raise Exception(f'[ERROR]: dtype is None. var -> {var}')
+
+        np_dtype = onnx.helper.tensor_dtype_to_np_dtype(dtype)
+        arr = np.array(value, dtype=np_dtype)
+        return self.add_array(arr, name=name or f"__const_{value}", dtype_code=dtype)
+
 
     def add_array(
         self,

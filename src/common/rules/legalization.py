@@ -215,7 +215,7 @@ def get_legalization_specs() -> list[RuleSpec]:
             name="reciprocal_to_div",
             source=PN("Reciprocal", (PV("?x"),)),
             build_fn=lambda builder, vars: builder.add_op(
-                "Div", [builder.add_scalar(1.0), vars["?x"]]
+                "Div", [builder.add_scalar(1.0, "?x"), vars["?x"]]
             ),
         ),
         RuleSpec(
@@ -247,7 +247,7 @@ def _build_sub_to_add_neg(builder: GraphBuilder, vars: dict[str, object]) -> obj
 
 
 def _build_neg_to_mul(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    return builder.add_op("Mul", [vars["?x"], builder.add_scalar(-1.0)])
+    return builder.add_op("Mul", [vars["?x"], builder.add_scalar(-1.0, "?x")])
 
 
 def _build_shape_to_reshape(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -268,22 +268,43 @@ def _build_pow_to_cube(builder: GraphBuilder, vars: dict[str, object]) -> object
 
 
 def _build_pow_to_reciprocal(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    return builder.add_op("Div", [builder.add_scalar(1.0), vars["?x"]])
+    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), vars["?x"]])
 
 
 def _build_pow_to_rsqrt(builder: GraphBuilder, vars: dict[str, object]) -> object:
     sqrt = builder.add_op("Sqrt", [vars["?x"]])
-    return builder.add_op("Div", [builder.add_scalar(1.0), sqrt])
+    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), sqrt])
 
 
 def _build_layernorm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Decompose LayerNorm(x, scale, bias) into primitive arithmetic ops.
+
+    LayerNorm normalizes the input along `axis` so that the slice has
+    zero mean and unit variance, then applies an affine transform:
+
+        mean      = ReduceMean(x, axis, keepdims=1)
+        centered  = x - mean
+        var       = ReduceMean(centered², axis, keepdims=1)
+        std       = sqrt(var + epsilon)
+        out       = (centered / std) * scale + bias
+
+    Why decompose:
+    - LayerNorm is a single fused op in ONNX (opset 17+), but many
+      target backends (e.g. QNN EP) do not support it natively.
+    - The decomposed form uses only ReduceMean, Sub, Mul, Add, Sqrt, Div
+      which are universally supported.
+    - epsilon (default 1e-5) prevents division by zero when variance is
+      near zero. It is always float regardless of input dtype, because
+      the variance computation is inherently floating-point.
+    """
     axis = builder.get_matched_attr("axis")
     epsilon = builder.get_matched_attr("epsilon")
     axis = -1 if axis is None else int(axis)
     epsilon = 1e-5 if epsilon is None else float(epsilon)
 
     axes = builder.add_array(np.array([axis], dtype=np.int64), f"__ln_axes_{axis}", dtype_code=7)
-    eps = builder.add_scalar(epsilon, name=f"__ln_eps_{epsilon}")
+    # epsilon is always float32: variance is a floating-point quantity.
+    eps = builder.add_scalar_float(epsilon, name=f"__ln_eps_{epsilon}")
     mean = builder.add_op("ReduceMean", [vars["?x"], axes], attrs={"keepdims": 1})
     centered = builder.add_op("Sub", [vars["?x"], mean])
     squared = builder.add_op("Mul", [centered, centered])
@@ -297,7 +318,7 @@ def _build_layernorm_decompose(builder: GraphBuilder, vars: dict[str, object]) -
 
 def _build_where_mask_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
     cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
-    inverse = builder.add_op("Sub", [builder.add_scalar(1.0), cast])
+    inverse = builder.add_op("Sub", [builder.add_scalar_float(1.0), cast]) # To check. 
     return builder.add_op("Mul", [inverse, vars["?false"]])
 
 
@@ -322,8 +343,8 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
     if any(data is None for data in (s_data, b_data, m_data, v_data)):
         return builder.get_match()
 
-    scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(np.float32)
-    bias_factor = (b_data - m_data * scale_factor).astype(np.float32)
+    scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(np.float32) # type: ignore
+    bias_factor = (b_data - m_data * scale_factor).astype(np.float32) # type: ignore
 
     x_shape = builder.get_shape("?x")
     if x_shape is not None and len(x_shape) == 4:
@@ -437,7 +458,7 @@ def _build_constantofshape_fold(
             fill_dtype = fill_array.dtype
         else:
             try:
-                fill_val = float(value_attr)
+                fill_val = float(value_attr) # type: ignore 
             except (TypeError, ValueError):
                 return builder.get_match()
     else:
@@ -525,7 +546,7 @@ def _build_where_to_arithmetic(
 ) -> object:
     """Where(cond, A, B) → Cast(cond)*A + (1-Cast(cond))*B."""
     cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
-    one = builder.add_scalar(1.0, "__where_one")
+    one = builder.add_scalar_float(1.0, "__where_one")
     inv = builder.add_op("Sub", [one, cast])
     true_branch = builder.add_op("Mul", [cast, vars["?true"]])
     false_branch = builder.add_op("Mul", [inv, vars["?false"]])

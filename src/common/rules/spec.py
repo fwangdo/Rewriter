@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from src.superopt.egraph.pattern import Pattern
+from src.superopt.egraph.pattern import Pattern, Subst
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,11 @@ class GraphBuilder(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def add_scalar(self, value: float, name: str = "") -> Any:
+    def get_dtype(self, name: str):
+        raise NotImplementedError
+
+    @abstractmethod
+    def add_scalar(self, value: float, var: str, name: str = "") -> Any:
         raise NotImplementedError
 
     @abstractmethod
@@ -78,6 +82,21 @@ class GraphBuilder(ABC):
     @abstractmethod
     def get_match(self) -> Any:
         raise NotImplementedError
+
+    # concrete method
+    def add_scalar_float(self, value: float, name: str = "") -> Any:
+        return self.add_array(
+            np.array(value, dtype=np.float32),
+            name=name or f"__const_{value}",
+            dtype_code=1,
+        )
+
+    def add_scalar_int64(self, value: int, name: str = "") -> Any:
+        return self.add_array(
+            np.array(value, dtype=np.int64),
+            name=name or f"__const_{value}",
+            dtype_code=7,
+        )
 
 
 BuildFn = Callable[[GraphBuilder, dict[str, Any]], Any]
