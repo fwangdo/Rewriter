@@ -56,18 +56,21 @@ def get_legalization_specs() -> list[RuleSpec]:
             checks=(VarCheck("?x", has_shape=True),),
             build_fn=_build_shape_to_reshape,
         ),
+        # Pow(x, 1) → x. Raising to the power 1 is identity.
         RuleSpec(
             name="pow_to_identity",
             source=PN("Pow", (PV("?x"), PV("?e"))),
             checks=(VarCheck("?e", scalar_close=1.0),),
             build_fn=lambda builder, vars: vars["?x"],
         ),
+        # Pow(x, 0.5) → Sqrt(x). Square root is more widely supported than Pow.
         RuleSpec(
             name="pow_to_sqrt",
             source=PN("Pow", (PV("?x"), PV("?e"))),
             checks=(VarCheck("?e", scalar_close=0.5),),
             build_fn=lambda builder, vars: builder.add_op("Sqrt", [vars["?x"]]),
         ),
+        # Pow(x, 2) → Mul(x, x). Squaring via Mul avoids Pow.
         RuleSpec(
             name="pow_to_mul",
             source=PN("Pow", (PV("?x"), PV("?e"))),
@@ -97,15 +100,15 @@ def get_legalization_specs() -> list[RuleSpec]:
             source=PN("LayerNormalization", (PV("?x"), PV("?scale"), PV("?bias"))),
             build_fn=_build_layernorm_decompose,
         ),
-        RuleSpec(
-            name="where_mask_decompose",
-            source=PN("Where", (PV("?cond"), PV("?true"), PV("?false"))),
-            checks=(
-                VarCheck("?true", scalar_abs_lt=1e-8),
-                VarCheck("?false", scalar_lte=-1.0e30),
-            ),
-            build_fn=_build_where_mask_decompose,
-        ),
+        # RuleSpec(
+        #     name="where_mask_decompose",
+        #     source=PN("Where", (PV("?cond"), PV("?true"), PV("?false"))),
+        #     checks=(
+        #         VarCheck("?true", scalar_abs_lt=1e-8),
+        #         VarCheck("?false", scalar_lte=-1.0e30),
+        #     ),
+        #     build_fn=_build_where_mask_decompose,
+        # ),
         RuleSpec(
             name="where_to_arithmetic",
             source=PN("Where", (PV("?cond"), PV("?true"), PV("?false"))),
@@ -211,6 +214,8 @@ def get_legalization_specs() -> list[RuleSpec]:
             source=PN("Abs", (PV("?x"),)),
             build_fn=_build_abs_decompose,
         ),
+        # Reciprocal(x) → Div(1, x). Reciprocal computes 1/x element-wise.
+        # Replaced with Div which is more widely supported.
         RuleSpec(
             name="reciprocal_to_div",
             source=PN("Reciprocal", (PV("?x"),)),
@@ -234,23 +239,46 @@ def get_legalization_specs() -> list[RuleSpec]:
 
 
 def _build_eliminate_identity(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Identity(x) → x.
+    Identity is a no-op that passes its input through unchanged. Removed
+    because it adds a node without any computation."""
     return vars["?x"]
 
 
 def _build_greater_to_less(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    return builder.add_op("Less", [vars["?b"], vars["?a"]])
+    """Greater(a, b) → Less(b, a).
+    Greater returns element-wise a > b. Equivalent to Less with swapped
+    operands. Canonicalizes comparison ops to reduce the op vocabulary."""
+    shape = builder.get_shape("?b")
+    dtype = builder.get_dtype("?b")
+    return builder.add_op("Less", [vars["?b"], vars["?a"]], shape, dtype)
 
 
 def _build_sub_to_add_neg(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Sub(x, y) → Add(x, Neg(y)).
+    Sub computes element-wise x - y. Decomposed into Add + Neg so that
+    the backend only needs to support Add, and additive rewrites
+    (commutativity, associativity) apply uniformly."""
+    shape = builder.get_shape("?y")
+    dtype = builder.get_dtype("?y")
     neg = builder.add_op("Neg", [vars["?y"]])
-    return builder.add_op("Add", [vars["?x"], neg])
+    return builder.add_op("Add", [vars["?x"], neg], shape, dtype)
 
 
 def _build_neg_to_mul(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    return builder.add_op("Mul", [vars["?x"], builder.add_scalar(-1.0, "?x")])
+    """Neg(x) → Mul(x, -1).
+    Neg returns element-wise -x. Expressed as Mul so the backend only
+    needs Mul, and Neg is removed from the op vocabulary."""
+    shape = builder.get_shape("?x")
+    dtype = builder.get_dtype("?x")
+    return builder.add_op("Mul", [vars["?x"], builder.add_scalar(-1, "?x")], shape, dtype)
 
 
 def _build_shape_to_reshape(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Squeeze(x, axes) or Unsqueeze(x, axes) → Reshape(x, target_shape).
+    Squeeze removes size-1 dimensions; Unsqueeze inserts them. Both are
+    special cases of Reshape when the full shape is statically known.
+    Canonicalized to Reshape to reduce the op vocabulary."""
     shape = builder.get_matched_shape()
     if shape is None or sum(1 for dim in shape if dim == -1) > 1:
         return builder.get_match()
@@ -259,34 +287,50 @@ def _build_shape_to_reshape(builder: GraphBuilder, vars: dict[str, object]) -> o
         name=f"__shape_{shape}",
         dtype_code=7,
     )
-    return builder.add_op("Reshape", [vars["?x"], shape_value])
+
+    dtype = builder.get_dtype("?x")
+    return builder.add_op("Reshape", [vars["?x"], shape_value], shape, dtype)
 
 
 def _build_pow_to_cube(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Pow(x, 3) → Mul(Mul(x, x), x).
+    Pow computes element-wise x^e. When e=3, replaced with two Muls to
+    avoid Pow which many backends don't support."""
+    shape = builder.get_shape("?x")
+    dtype = builder.get_dtype("?x")
     squared = builder.add_op("Mul", [vars["?x"], vars["?x"]])
-    return builder.add_op("Mul", [squared, vars["?x"]])
+    return builder.add_op("Mul", [squared, vars["?x"]], shape, dtype)
 
 
 def _build_pow_to_reciprocal(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), vars["?x"]])
+    """Pow(x, -1) → Div(1, x).
+    Computes 1/x. Replaces Pow with Div which is more widely supported."""
+    shape = builder.get_shape("?x")
+    dtype = builder.get_dtype("?x")
+    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), vars["?x"]], shape, dtype)
 
 
 def _build_pow_to_rsqrt(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Pow(x, -0.5) → Div(1, Sqrt(x)).
+    Computes 1/sqrt(x). Replaces Pow with Sqrt + Div which are more
+    widely supported."""
+    shape = builder.get_shape("?x")
+    dtype = builder.get_dtype("?x")
     sqrt = builder.add_op("Sqrt", [vars["?x"]])
-    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), sqrt])
+    return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), sqrt], shape, dtype)
 
 
 def _build_layernorm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Decompose LayerNorm(x, scale, bias) into primitive arithmetic ops.
 
-    LayerNorm normalizes the input along `axis` so that the slice has
-    zero mean and unit variance, then applies an affine transform:
+    LayerNorm normalizes the input along ``axis`` so that the slice has
+    zero mean and unit variance, then applies an affine transform::
 
-        mean      = ReduceMean(x, axis, keepdims=1)
-        centered  = x - mean
-        var       = ReduceMean(centered², axis, keepdims=1)
-        std       = sqrt(var + epsilon)
-        out       = (centered / std) * scale + bias
+        mean      = ReduceMean(x, axis, keepdims=1)   # shape: [..., 1], dtype: same as x
+        centered  = x - mean                          # shape: same as x (broadcast)
+        var       = ReduceMean(centered², axis, kd=1)  # shape: [..., 1]
+        std       = sqrt(var + epsilon)                # shape: [..., 1]
+        out       = (centered / std) * scale + bias    # shape: same as x
 
     Why decompose:
     - LayerNorm is a single fused op in ONNX (opset 17+), but many
@@ -297,42 +341,77 @@ def _build_layernorm_decompose(builder: GraphBuilder, vars: dict[str, object]) -
       near zero. It is always float regardless of input dtype, because
       the variance computation is inherently floating-point.
     """
+    from src.common.analysis.shape import infer_reduce_mean
+
     axis = builder.get_matched_attr("axis")
     epsilon = builder.get_matched_attr("epsilon")
     axis = -1 if axis is None else int(axis)
     epsilon = 1e-5 if epsilon is None else float(epsilon)
 
+    x_shape = builder.get_shape("?x")
+    x_dtype = builder.get_dtype("?x")
+    if x_shape is not None and x_dtype is not None:
+        reduced_shape, _ = infer_reduce_mean(
+            x_shape, x_dtype, [axis],
+            keepdims=True, opset_version=builder.get_opset_version(),
+        )
+    else:
+        reduced_shape = None
+
     axes = builder.add_array(np.array([axis], dtype=np.int64), f"__ln_axes_{axis}", dtype_code=7)
     # epsilon is always float32: variance is a floating-point quantity.
     eps = builder.add_scalar_float(epsilon, name=f"__ln_eps_{epsilon}")
-    mean = builder.add_op("ReduceMean", [vars["?x"], axes], attrs={"keepdims": 1})
-    centered = builder.add_op("Sub", [vars["?x"], mean])
-    squared = builder.add_op("Mul", [centered, centered])
-    var = builder.add_op("ReduceMean", [squared, axes], attrs={"keepdims": 1})
-    var_eps = builder.add_op("Add", [var, eps])
-    std = builder.add_op("Sqrt", [var_eps])
-    normalized = builder.add_op("Div", [centered, std])
-    scaled = builder.add_op("Mul", [normalized, vars["?scale"]])
-    return builder.add_op("Add", [scaled, vars["?bias"]])
+    mean = builder.add_op("ReduceMean", [vars["?x"], axes],
+                          shape=reduced_shape, dtype=x_dtype,
+                          attrs={"keepdims": 1})
+    centered = builder.add_op("Sub", [vars["?x"], mean],
+                              shape=x_shape, dtype=x_dtype)
+    squared = builder.add_op("Mul", [centered, centered],
+                             shape=x_shape, dtype=x_dtype)
+    var = builder.add_op("ReduceMean", [squared, axes],
+                         shape=reduced_shape, dtype=x_dtype,
+                         attrs={"keepdims": 1})
+    var_eps = builder.add_op("Add", [var, eps],
+                             shape=reduced_shape, dtype=x_dtype)
+    std = builder.add_op("Sqrt", [var_eps],
+                         shape=reduced_shape, dtype=x_dtype)
+    normalized = builder.add_op("Div", [centered, std],
+                                shape=x_shape, dtype=x_dtype)
+    scaled = builder.add_op("Mul", [normalized, vars["?scale"]],
+                            shape=x_shape, dtype=x_dtype)
+    return builder.add_op("Add", [scaled, vars["?bias"]],
+                          shape=x_shape, dtype=x_dtype)
 
 
-def _build_where_mask_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
-    inverse = builder.add_op("Sub", [builder.add_scalar_float(1.0), cast]) # To check. 
-    return builder.add_op("Mul", [inverse, vars["?false"]])
+# def _build_where_mask_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+#     cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
+#     inverse = builder.add_op("Sub", [builder.add_scalar_float(1.0), cast]) # To check. 
+#     return builder.add_op("Mul", [inverse, vars["?false"]])
 
 
 def _build_range_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Range(start=0, limit, step=1) → Slice(arange_table, 0, limit).
+    Range generates a 1-D sequence [start, start+step, ..., limit). When
+    start=0 and step=1 (checked by VarCheck), this is equivalent to
+    slicing a pre-built [0..4095] lookup table up to ``limit``.
+    Eliminates Range which many backends don't support."""
+    # TODO: we need to check 4096. 
     table = builder.add_array(np.arange(4096, dtype=np.int64), "__arange_table_4096", dtype_code=7)
     starts = builder.add_array(np.array([0], dtype=np.int64), "__slice_starts_0", dtype_code=7)
     axes = builder.add_array(np.array([0], dtype=np.int64), "__slice_axes_0", dtype_code=7)
     steps = builder.add_array(np.array([1], dtype=np.int64), "__slice_steps_1", dtype_code=7)
     ends_shape = builder.add_array(np.array([1], dtype=np.int64), "__shape_1", dtype_code=7)
-    ends = builder.add_op("Reshape", [vars["?limit"], ends_shape])
-    return builder.add_op("Slice", [table, starts, ends, axes, steps])
+    ends = builder.add_op("Reshape", [vars["?limit"], ends_shape], (1,), 7)
+    return builder.add_op("Slice", [table, starts, ends, axes, steps], builder.get_matched_shape(), 7)
 
 
 def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """BatchNormalization(x, s, b, mean, var) → Mul(x, scale_factor) + Add(bias_factor).
+    BN normalizes x per-channel using running mean/variance, then applies
+    affine transform: out = s * (x - mean) / sqrt(var + eps) + b.
+    Since s, b, mean, var are all constant weights, the entire normalization
+    is folded into a single Mul + Add with precomputed scale/bias tensors.
+    Eliminates BN which is inference-only and easily foldable."""
     epsilon = builder.get_matched_attr("epsilon")
     epsilon = 1e-5 if epsilon is None else float(epsilon)
 
@@ -358,7 +437,13 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
     return builder.add_op("Add", [mul, bf])
 
 
+# TODO 
 def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Gemm(a, w, b) → Add(MatMul(a', w'), b').
+    Gemm computes alpha * A @ B + beta * C with optional transposes.
+    Decomposed into MatMul + Add because Gemm is not widely supported
+    on edge backends. Transpose and alpha/beta scaling are folded into
+    the constant weight and bias at rewrite time."""
     a_value, _, b_value = vars["?a"], vars["?w"], vars["?b"]
     trans_a, trans_b, alpha, beta = _get_gemm_attrs(builder)
 
@@ -384,6 +469,9 @@ def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obj
 
 
 def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """Gemm(a, w) → MatMul(a', w').
+    Same as gemm_decompose but for the 2-input variant without bias.
+    Transpose and alpha scaling are folded into the weight."""
     a_value = vars["?a"]
     trans_a, trans_b, alpha, _beta = _get_gemm_attrs(builder)
 
@@ -402,6 +490,11 @@ def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]
 
 
 def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> object:
+    """MatMul(a, w) → Conv(Reshape(a), Reshape(w)) when both are 2-D.
+    MatMul performs matrix multiplication. Some edge backends (e.g. TIDL)
+    support Conv but not MatMul. The 2-D matmul [M,K]@[K,N] is equivalent
+    to a 1x1 Conv with weight reshaped to [N,K,1,1] after reshaping the
+    input to [1,K,M,1] and transposing the output back."""
     w_data = builder.get_weight_data("?w")
     if w_data is None or w_data.ndim != 2:
         return builder.get_match()
@@ -544,7 +637,11 @@ def _build_pad_eliminate_zero(
 def _build_where_to_arithmetic(
     builder: GraphBuilder, vars: dict[str, object]
 ) -> object:
-    """Where(cond, A, B) → Cast(cond)*A + (1-Cast(cond))*B."""
+    """Where(cond, A, B) → Cast(cond)*A + (1-Cast(cond))*B.
+    Where selects elements from A where cond is True, B where False.
+    Decomposed into arithmetic: Cast bool→float as a mask, multiply
+    each branch by mask/inverse-mask, then add. Eliminates Where which
+    some backends don't support."""
     cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
     one = builder.add_scalar_float(1.0, "__where_one")
     inv = builder.add_op("Sub", [one, cast])
@@ -580,14 +677,20 @@ def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
 
 
 def _build_not_to_sub(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    """Not(x) → Sub(1, Cast(x, float))."""
+    """Not(x) → Sub(1, Cast(x, float)).
+    Not returns element-wise logical negation of a bool tensor.
+    Cast bool→float maps True→1, False→0, then 1-x flips it.
+    Eliminates Not by decomposing into Cast + Sub."""
     cast = builder.add_op("Cast", [vars["?x"]], attrs={"to": 1})
     one = builder.add_scalar(1.0, "__not_one")
     return builder.add_op("Sub", [one, cast])
 
 
 def _build_abs_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
-    """Abs(x) → Relu(x) + Relu(Neg(x)) = Relu(x) + Relu(Mul(x, -1))."""
+    """Abs(x) → Relu(x) + Relu(-x).
+    Abs returns element-wise |x|. Decomposed using Relu(x) for the
+    positive part and Relu(-x) for the negative part. Their sum equals
+    |x|. Eliminates Abs by using Relu + Mul + Add."""
     neg_one = builder.add_scalar(-1.0, "__abs_neg")
     relu_pos = builder.add_op("Relu", [vars["?x"]])
     neg_x = builder.add_op("Mul", [vars["?x"], neg_one])

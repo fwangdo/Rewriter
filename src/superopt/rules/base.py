@@ -83,6 +83,8 @@ class EGraphBuilder(GraphBuilder):
         self,
         op: str,
         inputs: list[Any],
+        shape: tuple[int, ...] | None = None,
+        dtype: int | None = None,
         attrs: dict[str, Any] | None = None,
     ) -> EClassId:
         input_cids = tuple(_as_cid(value) for value in inputs)
@@ -93,29 +95,12 @@ class EGraphBuilder(GraphBuilder):
                 attrs=tuple((attrs or {}).items()),
             )
         )
-        shape, dtype = self._infer_from_inputs(input_cids)
         if shape is not None or dtype is not None:
             self.egraph.update_analysis(
                 cid,
                 AnalysisData(shape=shape, dtype=dtype),
             )
         return cid
-
-    def _infer_from_inputs(
-        self, input_cids: tuple[EClassId, ...]
-    ) -> tuple[tuple[int, ...] | None, int | None]:
-        """Propagate shape/dtype from the first input that has them."""
-        shape = None
-        dtype = None
-        for c in input_cids:
-            data = self.egraph.eclass(c).data
-            if shape is None and data.shape is not None:
-                shape = data.shape
-            if dtype is None and data.dtype is not None:
-                dtype = data.dtype
-            if shape is not None and dtype is not None:
-                break
-        return shape, dtype
 
     def get_dtype(self, var: str):
         return self.egraph.eclass(self.subst[var]).data.dtype
@@ -194,6 +179,9 @@ class EGraphBuilder(GraphBuilder):
 
     def get_match(self) -> EClassId:
         return self.match_cid
+
+    def get_opset_version(self) -> int:
+        return getattr(self.egraph, "opset_version", 18)
 
 
 def _as_cid(value: Any) -> EClassId:

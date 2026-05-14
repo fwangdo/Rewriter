@@ -300,43 +300,26 @@ class IRRewriteBuilder(GraphBuilder):
         self,
         op: str,
         inputs: list[Any],
+        shape: tuple[int, ...] | None = None,
+        dtype: int | None = None,  # onnx.TensorProto.DataType
         attrs: dict[str, Any] | None = None,
     ) -> str:
         input_ids = tuple(_as_value_id(value) for value in inputs)
-        shape, dtype = self._infer_from_inputs(input_ids)
         output_id = self._fresh_value_id(op.lower())
         self.ir.add_node(
             IRNode(
                 id=output_id,
                 op=op,
                 inputs=input_ids,
-                attrs=tuple((attrs or {}).items()),
                 shape=shape,
                 dtype=dtype,
+                attrs=tuple((attrs or {}).items()),
             )
         )
         return output_id
 
-    def _infer_from_inputs(
-        self, input_ids: tuple[str, ...]
-    ) -> tuple[tuple[int, ...] | None, int | None]:
-        """Propagate shape/dtype from the first input that has them."""
-        shape = None
-        dtype = None
-        for iid in input_ids:
-            node = self.ir.nodes.get(iid)
-            if node is None:
-                continue
-            if shape is None and node.shape is not None:
-                shape = node.shape
-            if dtype is None and node.dtype is not None:
-                dtype = node.dtype
-            if shape is not None and dtype is not None:
-                break
-        return shape, dtype
-
-    def get_dtype(self, name: str) -> int | None:
-        return self.ir.nodes[self.subst[name]].dtype
+    def get_dtype(self, var: str) -> int | None:
+        return self.ir.nodes[self.subst[var]].dtype
 
     def add_scalar(self, value: float, var: str, name: str = "") -> str:
         dtype = self.get_dtype(var)
@@ -390,6 +373,9 @@ class IRRewriteBuilder(GraphBuilder):
 
     def get_match(self) -> str:
         return self.source_id
+
+    def get_opset_version(self) -> int:
+        return self.ir.opset_version
 
     def _fresh_value_id(self, role: str) -> str:
         while True:

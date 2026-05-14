@@ -43,6 +43,9 @@ def onnx_to_ir(model: onnx.ModelProto) -> IRGraph:
     model = onnx.shape_inference.infer_shapes(model)
     graph = model.graph
     ir = IRGraph()
+    ir.opset_version = next(
+        (o.version for o in model.opset_import if o.domain == ""), 18
+    )
 
     # input, which is runtime value. 
     ir.inputs = tuple(inp.name for inp in graph.input if inp.name not in {init.name for init in graph.initializer})

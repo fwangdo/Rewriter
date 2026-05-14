@@ -42,6 +42,8 @@ class GraphBuilder(ABC):
         self,
         op: str,
         inputs: list[Any],
+        shape: tuple[int, ...] | None = None,
+        dtype: int | None = None, 
         attrs: dict[str, Any] | None = None,
     ) -> Any:
         raise NotImplementedError
@@ -81,6 +83,10 @@ class GraphBuilder(ABC):
 
     @abstractmethod
     def get_match(self) -> Any:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_opset_version(self) -> int:
         raise NotImplementedError
 
     # concrete method

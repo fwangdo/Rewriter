@@ -108,6 +108,7 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
 
     # Store initializer data on e-graph so rules can access weight arrays.
     egraph.initializers = dict(ir.initializers)
+    egraph.opset_version = ir.opset_version
 
     if ir.root is None:
         raise ValueError("IRGraph has no root node")
@@ -155,7 +156,6 @@ def _load_preprocessed_ir(input_path: str) -> tuple[onnx.ModelProto, IRGraph]:
     model = onnx.load(input_path)
     model = run_pre_passes(model)
     return model, onnx_to_ir(model)
-
 
 
 def _run_egraph_saturation(
