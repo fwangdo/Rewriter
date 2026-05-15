@@ -14,7 +14,7 @@ def get_layout_specs() -> list[RuleSpec]:
         RuleSpec(
             name="reshape_reshape",
             source=PN("Reshape", (PN("Reshape", (PV("?x"), PV("?y"))), PV("?z"))),
-            build_fn=lambda b, v: b.add_op("Reshape", [v["?x"], v["?z"]]),
+            build_fn=lambda b, v: b.add_op("Reshape", [v["?x"], v["?z"]], b.get_matched_shape(), b.get_dtype("?x")),
         ),
     ]
     for perm in ((0, 1), (1, 0)):

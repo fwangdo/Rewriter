@@ -68,14 +68,14 @@ def get_legalization_specs() -> list[RuleSpec]:
             name="pow_to_sqrt",
             source=PN("Pow", (PV("?x"), PV("?e"))),
             checks=(VarCheck("?e", scalar_close=0.5),),
-            build_fn=lambda builder, vars: builder.add_op("Sqrt", [vars["?x"]]),
+            build_fn=lambda builder, vars: builder.add_op("Sqrt", [vars["?x"]], builder.get_matched_shape(), builder.get_dtype("?x")),
         ),
         # Pow(x, 2) → Mul(x, x). Squaring via Mul avoids Pow.
         RuleSpec(
             name="pow_to_mul",
             source=PN("Pow", (PV("?x"), PV("?e"))),
             checks=(VarCheck("?e", scalar_close=2.0),),
-            build_fn=lambda builder, vars: builder.add_op("Mul", [vars["?x"], vars["?x"]]),
+            build_fn=lambda builder, vars: builder.add_op("Mul", [vars["?x"], vars["?x"]], builder.get_matched_shape(), builder.get_dtype("?x")),
         ),
         RuleSpec(
             name="pow_to_cube",
@@ -220,7 +220,8 @@ def get_legalization_specs() -> list[RuleSpec]:
             name="reciprocal_to_div",
             source=PN("Reciprocal", (PV("?x"),)),
             build_fn=lambda builder, vars: builder.add_op(
-                "Div", [builder.add_scalar(1.0, "?x"), vars["?x"]]
+                "Div", [builder.add_scalar(1.0, "?x"), vars["?x"]],
+                builder.get_matched_shape(), builder.get_dtype("?x"),
             ),
         ),
         RuleSpec(
@@ -259,9 +260,9 @@ def _build_sub_to_add_neg(builder: GraphBuilder, vars: dict[str, object]) -> obj
     Sub computes element-wise x - y. Decomposed into Add + Neg so that
     the backend only needs to support Add, and additive rewrites
     (commutativity, associativity) apply uniformly."""
-    shape = builder.get_shape("?y")
+    shape = builder.get_matched_shape()
     dtype = builder.get_dtype("?y")
-    neg = builder.add_op("Neg", [vars["?y"]])
+    neg = builder.add_op("Neg", [vars["?y"]], builder.get_shape("?y"), dtype)
     return builder.add_op("Add", [vars["?x"], neg], shape, dtype)
 
 
@@ -281,7 +282,7 @@ def _build_shape_to_reshape(builder: GraphBuilder, vars: dict[str, object]) -> o
     Canonicalized to Reshape to reduce the op vocabulary."""
     shape = builder.get_matched_shape()
     if shape is None or sum(1 for dim in shape if dim == -1) > 1:
-        return builder.get_match()
+        return builder.get_match("shape_to_reshape", "matched shape unknown or ambiguous")
     shape_value = builder.add_array(
         np.array(shape, dtype=np.int64),
         name=f"__shape_{shape}",
@@ -298,7 +299,7 @@ def _build_pow_to_cube(builder: GraphBuilder, vars: dict[str, object]) -> object
     avoid Pow which many backends don't support."""
     shape = builder.get_shape("?x")
     dtype = builder.get_dtype("?x")
-    squared = builder.add_op("Mul", [vars["?x"], vars["?x"]])
+    squared = builder.add_op("Mul", [vars["?x"], vars["?x"]], shape, dtype)
     return builder.add_op("Mul", [squared, vars["?x"]], shape, dtype)
 
 
@@ -316,7 +317,7 @@ def _build_pow_to_rsqrt(builder: GraphBuilder, vars: dict[str, object]) -> objec
     widely supported."""
     shape = builder.get_shape("?x")
     dtype = builder.get_dtype("?x")
-    sqrt = builder.add_op("Sqrt", [vars["?x"]])
+    sqrt = builder.add_op("Sqrt", [vars["?x"]], shape, dtype)
     return builder.add_op("Div", [builder.add_scalar(1.0, "?x"), sqrt], shape, dtype)
 
 
@@ -420,7 +421,7 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
     m_data = builder.get_weight_data("?bn_m")
     v_data = builder.get_weight_data("?bn_v")
     if any(data is None for data in (s_data, b_data, m_data, v_data)):
-        return builder.get_match()
+        return builder.get_match("bn_decompose", "missing BN weight data")
 
     scale_factor = (s_data / np.sqrt(v_data + epsilon)).astype(s_data.dtype) # type: ignore
     bias_factor = (b_data - m_data * scale_factor).astype(b_data.dtype) # type: ignore
@@ -433,8 +434,10 @@ def _build_bn_decompose(builder: GraphBuilder, vars: dict[str, object]) -> objec
 
     sf = builder.add_array(scale_factor, f"__bn_scale_{id(scale_factor)}")
     bf = builder.add_array(bias_factor, f"__bn_bias_{id(bias_factor)}")
-    mul = builder.add_op("Mul", [vars["?x"], sf])
-    return builder.add_op("Add", [mul, bf])
+    shape = builder.get_matched_shape()
+    dtype = builder.get_dtype("?x")
+    mul = builder.add_op("Mul", [vars["?x"], sf], shape, dtype)
+    return builder.add_op("Add", [mul, bf], shape, dtype)
 
 
 def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -448,16 +451,20 @@ def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obj
 
     w_data = builder.get_weight_data("?w")
     if w_data is None:
-        return builder.get_match()
+        return builder.get_match("gemm_decompose", "w is not constant")
     if trans_b:
         w_data = w_data.T
     w_data = (alpha * w_data).astype(w_data.dtype)
 
+    a_dtype = builder.get_dtype("?a")
     if trans_a:
-        a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
+        a_shape = builder.get_shape("?a")
+        t_shape = (a_shape[1], a_shape[0]) if a_shape is not None and len(a_shape) == 2 else None
+        a_value = builder.add_op("Transpose", [a_value], t_shape, a_dtype, attrs={"perm": (1, 0)})
 
     w_new = builder.add_array(w_data, f"__gemm_w_{id(w_data)}")
-    matmul = builder.add_op("MatMul", [a_value, w_new])
+    matched_shape = builder.get_matched_shape()
+    matmul = builder.add_op("MatMul", [a_value, w_new], matched_shape, a_dtype)
 
     b_data = builder.get_weight_data("?b")
     # we dont have to consider beta when it is 1.0
@@ -465,7 +472,7 @@ def _build_gemm_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obj
         b_data = (beta * b_data).astype(b_data.dtype)
         b_value = builder.add_array(b_data, f"__gemm_bias_{id(b_data)}")
 
-    return builder.add_op("Add", [matmul, b_value])
+    return builder.add_op("Add", [matmul, b_value], matched_shape, a_dtype)
 
 
 def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -477,16 +484,20 @@ def _build_gemm_decompose_no_bias(builder: GraphBuilder, vars: dict[str, object]
 
     w_data = builder.get_weight_data("?w")
     if w_data is None:
-        return builder.get_match()
+        return builder.get_match("gemm_decompose_no_bias", "w is not constant")
     if trans_b:
         w_data = w_data.T
     w_data = (alpha * w_data).astype(w_data.dtype)
 
+    a_dtype = builder.get_dtype("?a")
     if trans_a:
-        a_value = builder.add_op("Transpose", [a_value], attrs={"perm": (1, 0)})
+        a_shape = builder.get_shape("?a")
+        t_shape = (a_shape[1], a_shape[0]) if a_shape is not None and len(a_shape) == 2 else None
+        a_value = builder.add_op("Transpose", [a_value], t_shape, a_dtype, attrs={"perm": (1, 0)})
 
     w_new = builder.add_array(w_data, f"__gemm_w_{id(w_data)}")
-    return builder.add_op("MatMul", [a_value, w_new])
+    matched_shape = builder.get_matched_shape()
+    return builder.add_op("MatMul", [a_value, w_new], matched_shape, a_dtype)
 
 
 def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -497,22 +508,25 @@ def _build_matmul_to_conv(builder: GraphBuilder, vars: dict[str, object]) -> obj
     input to [1,K,M,1] and transposing the output back."""
     w_data = builder.get_weight_data("?w")
     if w_data is None or w_data.ndim != 2:
-        return builder.get_match()
+        return builder.get_match("matmul_to_conv", "w is not 2-D constant")
 
     a_shape = builder.get_shape("?a")
     if a_shape is None or len(a_shape) != 2:
-        return builder.get_match()
+        return builder.get_match("matmul_to_conv", "a is not 2-D")
 
     k_size, n_size = w_data.shape
     conv_weight = w_data.T.reshape(n_size, k_size, 1, 1).astype(w_data.dtype)
     conv_w = builder.add_array(conv_weight, f"__matmul_conv_w_{id(conv_weight)}")
 
+    a_dtype = builder.get_dtype("?a")
+    m_size = a_shape[0]
     reshape_in_shape = builder.add_array(np.array([1, 0, -1, 1], dtype=np.int64), "__reshape_10n11", dtype_code=7)
-    reshape_in = builder.add_op("Reshape", [vars["?a"], reshape_in_shape])
-    conv = builder.add_op("Conv", [reshape_in, conv_w], attrs={"kernel_shape": (1, 1)})
-    t2 = builder.add_op("Transpose", [conv], attrs={"perm": (0, 2, 1, 3)})
+    reshape_in = builder.add_op("Reshape", [vars["?a"], reshape_in_shape], (1, k_size, m_size, 1), a_dtype)
+    conv = builder.add_op("Conv", [reshape_in, conv_w], (1, n_size, m_size, 1), a_dtype, attrs={"kernel_shape": (1, 1)})
+    t2 = builder.add_op("Transpose", [conv], (1, m_size, n_size, 1), a_dtype, attrs={"perm": (0, 2, 1, 3)})
     reshape_out_shape = builder.add_array(np.array([-1, n_size], dtype=np.int64), f"__reshape_n1_{n_size}", dtype_code=7)
-    return builder.add_op("Reshape", [t2, reshape_out_shape])
+    matched_shape = builder.get_matched_shape()
+    return builder.add_op("Reshape", [t2, reshape_out_shape], matched_shape, a_dtype)
 
 
 # TODO: add matmul -> conv for 3d, 4d version. 
@@ -521,7 +535,7 @@ def _build_shape_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Shape(x) → constant int64 tensor when shape is fully static."""
     shape = builder.get_shape("?x")
     if shape is None or any(d < 0 for d in shape):
-        return builder.get_match()
+        return builder.get_match("shape_fold", "shape unknown or dynamic")
     return builder.add_array(
         np.array(shape, dtype=np.int64), f"__shape_const_{shape}", dtype_code=7
     )
@@ -533,10 +547,10 @@ def _build_constantofshape_fold(
     """ConstantOfShape(shape) → constant tensor filled with the default value."""
     shape_data = builder.get_weight_data("?shape")
     if shape_data is None:
-        return builder.get_match()
-    target_shape = tuple(int(d) for d in shape_data.flat) # flat == flatten. 
+        return builder.get_match("constantofshape_fold", "shape is not constant")
+    target_shape = tuple(int(d) for d in shape_data.flat) # flat == flatten.
     if any(d < 0 for d in target_shape):
-        return builder.get_match()
+        return builder.get_match("constantofshape_fold", "shape has dynamic dims")
     # ConstantOfShape default value comes from the "value" attribute (scalar tensor).
     # In the e-graph, numpy arrays are stored as (dtype_str, shape, bytes) tuples.
     value_attr = builder.get_matched_attr("value")
@@ -555,7 +569,7 @@ def _build_constantofshape_fold(
             try:
                 fill_val = float(value_attr) # type: ignore 
             except (TypeError, ValueError):
-                return builder.get_match()
+                return builder.get_match("constantofshape_fold", "unparseable value attr")
     else:
         fill_val = 0.0
     arr = np.full(target_shape, fill_val, dtype=fill_dtype)
@@ -566,14 +580,13 @@ def _build_constantofshape_fold(
     )
 
 
-# TODO.. 
 def _build_flatten_to_reshape(
     builder: GraphBuilder, vars: dict[str, object]
 ) -> object:
     """Flatten(x, axis) → Reshape(x, [pre, post])."""
     shape = builder.get_shape("?x")
     if shape is None or any(d < 0 for d in shape):
-        return builder.get_match()
+        return builder.get_match("flatten_to_reshape", "shape unknown or dynamic")
     axis = builder.get_matched_attr("axis")
     axis = 1 if axis is None else int(axis)
     if axis < 0:
@@ -586,7 +599,8 @@ def _build_flatten_to_reshape(
         post *= d
     flat_shape = np.array([pre, post], dtype=np.int64)
     shape_w = builder.add_array(flat_shape, f"__flat_{pre}_{post}", dtype_code=7)
-    return builder.add_op("Reshape", [vars["?x"], shape_w])
+    dtype = builder.get_dtype("?x")
+    return builder.add_op("Reshape", [vars["?x"], shape_w], (pre, post), dtype)
 
 
 def _build_expand_to_mul_ones(
@@ -598,20 +612,21 @@ def _build_expand_to_mul_ones(
     """
     shape_data = builder.get_weight_data("?shape")
     if shape_data is None:
-        return builder.get_match()
+        return builder.get_match("expand_to_mul_ones", "shape is not constant")
     target_shape = tuple(int(d) for d in shape_data.flat)
     if any(d < 0 for d in target_shape):
-        return builder.get_match()
+        return builder.get_match("expand_to_mul_ones", "shape has dynamic dims")
     ones = np.ones(target_shape, dtype=np.float32)
     ones_w = builder.add_array(ones, f"__expand_ones_{target_shape}")
-    return builder.add_op("Mul", [vars["?x"], ones_w])
+    dtype = builder.get_dtype("?x")
+    return builder.add_op("Mul", [vars["?x"], ones_w], target_shape, dtype)
 
 
 def _build_cos_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Cos(x) → constant when x is a constant tensor."""
     data = builder.get_weight_data("?x")
     if data is None:
-        return builder.get_match()
+        return builder.get_match("cos_fold", "x is not constant")
     result = np.cos(data).astype(data.dtype)
     return builder.add_array(result, f"__cos_folded_{id(result)}")
 
@@ -620,7 +635,7 @@ def _build_sin_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Sin(x) → constant when x is a constant tensor."""
     data = builder.get_weight_data("?x")
     if data is None:
-        return builder.get_match()
+        return builder.get_match("sin_fold", "x is not constant")
     result = np.sin(data).astype(data.dtype)
     return builder.add_array(result, f"__sin_folded_{id(result)}")
 
@@ -631,10 +646,10 @@ def _build_pad_eliminate_zero(
     """Pad(x, pads) → x when all pad values are zero."""
     pads_data = builder.get_weight_data("?pads")
     if pads_data is None:
-        return builder.get_match()
+        return builder.get_match("pad_eliminate_zero", "pads is not constant")
     if np.all(pads_data == 0):
         return vars["?x"]
-    return builder.get_match()
+    return builder.get_match("pad_eliminate_zero", "pads are non-zero")
 
 
 def _build_where_to_arithmetic(
@@ -645,12 +660,16 @@ def _build_where_to_arithmetic(
     Decomposed into arithmetic: Cast bool→float as a mask, multiply
     each branch by mask/inverse-mask, then add. Eliminates Where which
     some backends don't support."""
-    cast = builder.add_op("Cast", [vars["?cond"]], attrs={"to": 1})
-    one = builder.add_scalar_float(1.0, "__where_one")
-    inv = builder.add_op("Sub", [one, cast])
-    true_branch = builder.add_op("Mul", [cast, vars["?true"]])
-    false_branch = builder.add_op("Mul", [inv, vars["?false"]])
-    return builder.add_op("Add", [true_branch, false_branch])
+    cond_shape = builder.get_shape("?cond")
+    out_dtype = builder.get_dtype("?true")
+    cast_to = out_dtype if out_dtype is not None else 1
+    cast = builder.add_op("Cast", [vars["?cond"]], cond_shape, cast_to, attrs={"to": cast_to})
+    one = builder.add_scalar(1.0, "?true")
+    inv = builder.add_op("Sub", [one, cast], cond_shape, cast_to)
+    matched_shape = builder.get_matched_shape()
+    true_branch = builder.add_op("Mul", [cast, vars["?true"]], matched_shape, out_dtype)
+    false_branch = builder.add_op("Mul", [inv, vars["?false"]], matched_shape, out_dtype)
+    return builder.add_op("Add", [true_branch, false_branch], matched_shape, out_dtype)
 
 
 def _build_equal_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -658,11 +677,11 @@ def _build_equal_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     a_data = builder.get_weight_data("?a")
     b_data = builder.get_weight_data("?b")
     if a_data is None or b_data is None:
-        return builder.get_match()
+        return builder.get_match("equal_fold", "inputs are not both constant")
     try:
         result = a_data == b_data
     except (ValueError, TypeError):
-        return builder.get_match()
+        return builder.get_match("equal_fold", "comparison failed")
     return builder.add_array(result, f"__equal_folded_{id(result)}", dtype_code=9)
 
 
@@ -671,11 +690,11 @@ def _build_less_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     a_data = builder.get_weight_data("?a")
     b_data = builder.get_weight_data("?b")
     if a_data is None or b_data is None:
-        return builder.get_match()
+        return builder.get_match("less_fold", "inputs are not both constant")
     try:
         result = a_data < b_data
     except (ValueError, TypeError):
-        return builder.get_match()
+        return builder.get_match("less_fold", "comparison failed")
     return builder.add_array(result, f"__less_folded_{id(result)}", dtype_code=9)
 
 
@@ -684,9 +703,11 @@ def _build_not_to_sub(builder: GraphBuilder, vars: dict[str, object]) -> object:
     Not returns element-wise logical negation of a bool tensor.
     Cast bool→float maps True→1, False→0, then 1-x flips it.
     Eliminates Not by decomposing into Cast + Sub."""
-    cast = builder.add_op("Cast", [vars["?x"]], attrs={"to": 1})
-    one = builder.add_scalar(1.0, "__not_one")
-    return builder.add_op("Sub", [one, cast])
+    x_shape = builder.get_shape("?x")
+    cast = builder.add_op("Cast", [vars["?x"]], x_shape, 1, attrs={"to": 1})
+    one = builder.add_scalar(1.0, "?x")
+    matched_shape = builder.get_matched_shape()
+    return builder.add_op("Sub", [one, cast], matched_shape, 1)
 
 
 def _build_abs_decompose(builder: GraphBuilder, vars: dict[str, object]) -> object:
@@ -694,18 +715,20 @@ def _build_abs_decompose(builder: GraphBuilder, vars: dict[str, object]) -> obje
     Abs returns element-wise |x|. Decomposed using Relu(x) for the
     positive part and Relu(-x) for the negative part. Their sum equals
     |x|. Eliminates Abs by using Relu + Mul + Add."""
-    neg_one = builder.add_scalar(-1.0, "__abs_neg")
-    relu_pos = builder.add_op("Relu", [vars["?x"]])
-    neg_x = builder.add_op("Mul", [vars["?x"], neg_one])
-    relu_neg = builder.add_op("Relu", [neg_x])
-    return builder.add_op("Add", [relu_pos, relu_neg])
+    shape = builder.get_shape("?x")
+    dtype = builder.get_dtype("?x")
+    neg_one = builder.add_scalar(-1.0, "?x")
+    relu_pos = builder.add_op("Relu", [vars["?x"]], shape, dtype)
+    neg_x = builder.add_op("Mul", [vars["?x"], neg_one], shape, dtype)
+    relu_neg = builder.add_op("Relu", [neg_x], shape, dtype)
+    return builder.add_op("Add", [relu_pos, relu_neg], shape, dtype)
 
 
 def _build_ceil_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Ceil(x) → constant when x is constant."""
     data = builder.get_weight_data("?x")
     if data is None:
-        return builder.get_match()
+        return builder.get_match("ceil_fold", "x is not constant")
     result = np.ceil(data).astype(data.dtype)
     return builder.add_array(result, f"__ceil_folded_{id(result)}")
 
@@ -714,7 +737,7 @@ def _build_floor_fold(builder: GraphBuilder, vars: dict[str, object]) -> object:
     """Floor(x) → constant when x is constant."""
     data = builder.get_weight_data("?x")
     if data is None:
-        return builder.get_match()
+        return builder.get_match("floor_fold", "x is not constant")
     result = np.floor(data).astype(data.dtype)
     return builder.add_array(result, f"__floor_folded_{id(result)}")
 
