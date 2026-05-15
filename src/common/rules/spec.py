@@ -94,8 +94,9 @@ class GraphBuilder(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_match(self) -> Any:
-        """매치된 소스 패턴 루트의 핸들을 그대로 반환. rewrite 포기 시 사용."""
+    def get_match(self, fn: str = "", reason: str = "") -> Any:
+        """매치된 소스 패턴 루트의 핸들을 그대로 반환. rewrite 포기 시 사용.
+        fn: fallback이 발생한 build 함수명, reason: 실패 원인."""
         raise NotImplementedError
 
     @abstractmethod

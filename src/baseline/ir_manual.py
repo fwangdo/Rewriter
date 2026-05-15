@@ -57,7 +57,7 @@ _MANUAL_RULE_ORDER = (
     "transpose_cancel_perm_0_1",
     "transpose_cancel_perm_1_0",
     "layernorm_decompose",
-    "where_mask_decompose",
+    # "where_mask_decompose",
     "where_to_arithmetic",
     "range_decompose",
     "bn_decompose",
@@ -290,6 +290,7 @@ def _prune_dead_ir(ir: IRGraph) -> None:
 class IRRewriteBuilder(GraphBuilder):
     """GraphBuilder adapter that emits IR nodes and initializers."""
     fallback_count = 0
+    fallback_reasons: dict[str, dict[str, int]] = {}
 
     def __init__(self, ir: IRGraph, source_id: str, subst: dict[str, str]) -> None:
         self.ir = ir
@@ -372,8 +373,11 @@ class IRRewriteBuilder(GraphBuilder):
             return None
         return node.attrs_dict.get(key)
 
-    def get_match(self) -> str:
+    def get_match(self, fn: str = "", reason: str = "") -> str:
         IRRewriteBuilder.fallback_count += 1
+        if fn:
+            by_fn = IRRewriteBuilder.fallback_reasons.setdefault(fn, {})
+            by_fn[reason] = by_fn.get(reason, 0) + 1
         return self.source_id
 
     def get_opset_version(self) -> int:
