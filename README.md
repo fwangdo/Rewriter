@@ -25,12 +25,12 @@ ONNX model
 
 ## Shared Rewrite Rules
 
-baseline과 superopt는 `src/common/rules/`에 정의된 동일한 42개 규칙을 공유한다.
+baseline과 superopt는 `src/common/rules/`에 정의된 동일한 41개 규칙을 공유한다.
 전체 목록은 [docs/rules.md](docs/rules.md)를 본다.
 
 | Category | Count | 예시 |
 | --- | --- | --- |
-| Legalization | 34 | `neg_to_mul`, `layernorm_decompose`, `gemm_decompose`, `matmul_to_conv` |
+| Legalization | 33 | `neg_to_mul`, `layernorm_decompose`, `gemm_decompose`, `matmul_to_conv` |
 | Arithmetic | 4 | `add_comm`, `mul_comm`, `add_assoc_right`, `mul_assoc_right` |
 | Layout | 3 | `reshape_reshape`, `transpose_cancel_perm_*` |
 | Fusion | 1 | `bias_add_commute` |
@@ -44,6 +44,9 @@ baseline과 superopt는 `src/common/rules/`에 정의된 동일한 42개 규칙�
 | `VISION_SUPPORTED_OPS` | vision model target |
 | `LLM_SUPPORTED_OPS` | decoder LLM target |
 | `UNION_SUPPORTED_OPS` | scaffold / ORT CPU friendly union set |
+
+`LLM_SUPPORTED_OPS` does not include `Range`, `Shape`, or `Unsqueeze`.
+These shape-construction operators must be removed or lowered by rewrite rules.
 
 ## Benchmark Models
 
@@ -60,31 +63,22 @@ baseline과 superopt는 `src/common/rules/`에 정의된 동일한 42개 규칙�
 
 ### Results
 
-현재 superopt는 greedy local-best extraction에서 ILP extraction으로 전환 중이다.
-ILP는 global legality를 더 잘 다루지만, 큰 e-graph에서는 solver budget이 병목이 된다.
-자세한 비교와 ILP 실험 결과는 [report.md](report.md)를 본다.
+`max_nodes`는 IR 크기에 비례하여 자동 설정된다 (`max(ir_nodes * 5, 2000)`).
+이 설정으로 모든 모델에서 ILP가 optimal에 도달한다.
 
-Greedy + `children_cost` 결과:
+| Model | Baseline ops | Superopt ops | Delta | Illegal | Correctness |
+| --- | ---: | ---: | ---: | ---: | --- |
+| tinyllama_15m | 780 | 717 | -63 | 63 (`Shape` 47, `Unsqueeze` 16) | OK |
+| smollm_135m | 3167 | 3227 | +60 | 197 (`Range` 1, `Shape` 127, `Unsqueeze` 69) | OK |
+| pythia_70m | 624 | 625 | +1 | 43 (`Shape` 27, `Unsqueeze` 16) | OK |
+| mobilenetv2 | 103 | 100 | -3 | 0 | OK |
+| mobilevit_xxs | 600 | 576 | -24 | 0 | OK |
+| yolo26_nano | 400 | 397 | -3 | 0 | OK |
 
-| Model | Original | Baseline | BL illegal | Superopt | SO illegal |
-|-------|----------|----------|------------|----------|------------|
-| mobilenetv2 | 100 | 100 | 0 | 103 | 0 |
-| yolo26_nano | 397 | 400 | 8 | 402 | 5 |
-| mobilevit_xxs | 417 | 576 | 0 | 507 | 17 |
-| tinyllama_15m | 1152 | 776 | 2 | 702 | 8 |
-| pythia_70m | 589 | 619 | 9 | 666 | 3 |
-| smollm_135m | 2844 | 3103 | 0 | 3119 | 124 |
-
-ILP soft extraction에서 확인한 legal 결과:
-
-| Model | max_nodes | ILP Superopt | Illegal |
-|-------|-----------|--------------|---------|
-| mobilenetv2 | 50000 | 100 | 0 |
-| yolo26_nano | 50000 | 397 | 0 |
-| tinyllama_15m | 50000 | 701 | 0 |
-| mobilevit_xxs | 5000 | 576 | 0 |
-| pythia_70m | 2000 | 603 | 0 |
-| smollm_135m | 5000 | 3092 | 0 |
+Vision 모델은 superopt가 baseline보다 같거나 적은 op 수를 달성한다.
+LLM 모델은 동적 shape으로 인해 `shape_fold`, `unsqueeze_to_reshape` 등의
+legalization 규칙이 적용되지 않아 illegal op이 남는다. 이는 baseline과 동일한
+한계이며, shape-flow legalization이 현재 blocker이다.
 
 ## Evaluation
 
@@ -96,7 +90,7 @@ Correctness와 ONNX Runtime CPU 기준으로 측정하며, performance는 graph�
 | 항목 | 의미 |
 | --- | --- |
 | Contract result | unsupported op가 남았는지 |
-| Correctness | output count, shape, dtype, value tolerance |
+| Correctness | output count, shape, dtype, value tolerance (NLP: atol=1e-2, vision: atol=1e-4) |
 | Estimated cost | extraction heuristic 값. 최종 성능값으로 보지 않는다. |
 
 ## Usage

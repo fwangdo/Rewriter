@@ -163,6 +163,16 @@ class EGraph:
                 new_data = AnalysisData.join(new_data, compute_analysis(self, enode))
         except ValueError:
             return
+        # Preserve fields that compute_analysis cannot infer (e.g. shape
+        # for Reshape/Transpose/Squeeze/Unsqueeze) from the existing data.
+        if new_data.shape is None:
+            new_data.shape = ec.data.shape
+        if new_data.dtype is None:
+            new_data.dtype = ec.data.dtype
+        if new_data.preferred_name is None:
+            new_data.preferred_name = ec.data.preferred_name
+        if new_data.scalar_value is None:
+            new_data.scalar_value = ec.data.scalar_value
         if new_data != ec.data:
             ec.data = new_data
             # Propagate upward: parents of this eclass need re-check

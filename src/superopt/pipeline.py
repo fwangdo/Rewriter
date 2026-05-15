@@ -187,7 +187,7 @@ def superoptimize(
     output_path: str | Path,
     supported_ops: frozenset[str] | None = None,
     max_iter: int = 15,
-    max_nodes: int = 50_000,
+    max_nodes: int | None = None,
     ilp_time_limit_s: float | None = 600,
     ilp_mip_gap: float | None = None,
 ) -> SuperoptResult:
@@ -206,6 +206,9 @@ def superoptimize(
 
     model, ir = _load_preprocessed_ir(input_path)
     original_nodes = _count_compute_nodes(ir)
+
+    if max_nodes is None:
+        max_nodes = max(len(ir.nodes) * 5, 2000)
 
     # 1. Saturation
     egraph, root_cid, blacklist, stats = _run_egraph_saturation(

@@ -3,7 +3,7 @@
 baseline과 superopt가 공유하는 rewrite 규칙 목록.
 규칙은 `src/common/rules/`에 정의되며, 양쪽 모두 `get_all_specs()`로 로드한다.
 
-## Legalization (34 rules)
+## Legalization (33 rules)
 
 | Name | Source → Target | Checks | Description |
 |------|----------------|--------|-------------|
@@ -20,7 +20,6 @@ baseline과 superopt가 공유하는 rewrite 규칙 목록.
 | pow_to_reciprocal | Pow(x, -1) → Div(1, x) | e scalar_close=-1.0 | Pow를 역수로 치환 |
 | pow_to_rsqrt | Pow(x, -0.5) → Div(1, Sqrt(x)) | e scalar_close=-0.5 | Pow를 역제곱근으로 치환 |
 | layernorm_decompose | LayerNormalization(x, s, b) → ReduceMean+Sub+Mul+Sqrt+Div+Add | — | LayerNorm 분해 |
-| where_mask_decompose | Where(cond, true, false) → Mul((1-Cast(cond)), false) | true scalar_abs_lt=1e-8, false scalar_lte=-1e30 | 마스크 패턴 Where 분해 |
 | where_to_arithmetic | Where(cond, A, B) → Cast(cond)*A + (1-Cast(cond))*B | — | Where를 산술 연산으로 분해 |
 | range_decompose | Range(start, limit, step) → Slice(arange_table, 0, limit) | start scalar_close=0.0, step scalar_close=1.0 | Range를 Slice 룩업으로 치환 |
 | bn_decompose | BatchNormalization(x, s, b, m, v) → Mul(x, scale) + bias | — | BatchNorm 분해 |
