@@ -63,12 +63,10 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Less",
         "MatMul",
         "Mul",
-        "Range",
         "ReduceMean",
         "Relu",
         "Reshape",
         "ScatterND",
-        "Shape",
         "Sigmoid",
         "Sin",
         "Slice",
@@ -78,7 +76,6 @@ LLM_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Tanh",
         "Transpose",
         "Trilu",
-        "Unsqueeze",
     }
 )
 
@@ -109,15 +106,12 @@ UNION_SUPPORTED_OPS: frozenset[str] = frozenset(
         "Neg",
         "Pad",
         "Pow",
-        "Range",
         "ReduceMax",
         "ReduceSum",
-        "Shape",
         "Sin",
         "Tanh",
         "Tile",
         "TopK",
-        "Unsqueeze",
         "Where",
     }
 )
