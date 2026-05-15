@@ -17,7 +17,7 @@ import numpy as np
 import onnx
 
 from src.common.rules import RuleSpec, get_all_specs
-from src.common.rules.spec import VarCheck
+from src.common.rules.spec import GraphBuilder, VarCheck
 from src.superopt.egraph.pattern import PatternNode, PatternVar
 
 from src.common.compat import run_post_passes, run_pre_passes
@@ -57,7 +57,7 @@ _MANUAL_RULE_ORDER = (
     "transpose_cancel_perm_0_1",
     "transpose_cancel_perm_1_0",
     "layernorm_decompose",
-    "where_mask_decompose",
+    # "where_mask_decompose",
     "where_to_arithmetic",
     "range_decompose",
     "bn_decompose",
@@ -287,37 +287,53 @@ def _prune_dead_ir(ir: IRGraph) -> None:
     return 
 
 
-class IRRewriteBuilder:
+class IRRewriteBuilder(GraphBuilder):
     """GraphBuilder adapter that emits IR nodes and initializers."""
+    fallback_count = 0
+    fallback_reasons: dict[str, dict[str, int]] = {}
 
     def __init__(self, ir: IRGraph, source_id: str, subst: dict[str, str]) -> None:
         self.ir = ir
         self.source_id = source_id
-        self.subst = subst
+        self.subst = subst # substitution information. 
         self._index = 0
 
     def add_op(
         self,
         op: str,
         inputs: list[Any],
+        shape: tuple[int, ...] | None = None,
+        dtype: int | None = None,  # onnx.TensorProto.DataType
         attrs: dict[str, Any] | None = None,
     ) -> str:
+        input_ids = tuple(_as_value_id(value) for value in inputs)
         output_id = self._fresh_value_id(op.lower())
         self.ir.add_node(
             IRNode(
                 id=output_id,
                 op=op,
-                inputs=tuple(_as_value_id(value) for value in inputs),
+                inputs=input_ids,
+                shape=shape,
+                dtype=dtype,
                 attrs=tuple((attrs or {}).items()),
             )
         )
         return output_id
 
-    def add_scalar(self, value: float, name: str = "") -> str:
+    def get_dtype(self, var: str) -> int | None:
+        return self.ir.nodes[self.subst[var]].dtype
+
+    def add_scalar(self, value: float, var: str, name: str = "") -> str:
+        dtype = self.get_dtype(var)
+        if dtype is None:
+            raise Exception(f'[ERROR]: dtype is None. var -> {var}')
+
+        np_dtype = onnx.helper.tensor_dtype_to_np_dtype(dtype)
+        arr = np.array(value, np_dtype)
         return self.add_array(
-            np.array(value, dtype=np.float32),
+            arr, 
             name=name or f"__const_{value}",
-            dtype_code=1,
+            dtype_code=dtype,
         )
 
     def add_array(
@@ -357,8 +373,15 @@ class IRRewriteBuilder:
             return None
         return node.attrs_dict.get(key)
 
-    def get_match(self) -> str:
+    def get_match(self, fn: str = "", reason: str = "") -> str:
+        IRRewriteBuilder.fallback_count += 1
+        if fn:
+            by_fn = IRRewriteBuilder.fallback_reasons.setdefault(fn, {})
+            by_fn[reason] = by_fn.get(reason, 0) + 1
         return self.source_id
+
+    def get_opset_version(self) -> int:
+        return self.ir.opset_version
 
     def _fresh_value_id(self, role: str) -> str:
         while True:

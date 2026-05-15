@@ -26,6 +26,7 @@ class IRGraph:
     initializers: dict[str, np.ndarray] = field(default_factory=dict)
     inputs: tuple[str, ...] = ()
     outputs: tuple[str, ...] = ()
+    opset_version: int = 18
 
     # for debugging. 
     def __repr__(self) -> str:

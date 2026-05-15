@@ -2,24 +2,17 @@ from __future__ import annotations
 
 import onnx
 
-from src.common.rules import get_all_specs
-
 from .cleanup import Cleanup
 from .constant_folding import ConstantFolding
-from .rule_runner import RuleRunner
 
 
 class Passer:
     """Run the frontend rewrite pipeline in a fixed order."""
 
     def __init__(self) -> None:
-        specs = get_all_specs()
-        assert [s.name for s in specs] == [s.name for s in get_all_specs()], \
-            "baseline and superopt rule sets diverged"
         self.passes = [
             ConstantFolding(),
             ConstantFolding(),
-            RuleRunner(specs),
             ConstantFolding(),
             Cleanup(),
         ]

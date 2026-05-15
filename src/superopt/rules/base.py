@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import onnx
 
 from src.common.rules.legalization import RuleSpec
 from src.common.rules.spec import VarCheck, GraphBuilder
@@ -70,8 +71,10 @@ def check_vars(egraph: EGraph, checks: tuple[VarCheck, ...], subst: Subst) -> bo
     return True
 
 
-class EGraphBuilder:
+class EGraphBuilder(GraphBuilder):
     """GraphBuilder implementation for the hand-rolled e-graph."""
+    fallback_count = 0
+    fallback_reasons: dict[str, dict[str, int]] = {}
 
     def __init__(self, egraph: EGraph, match_cid: EClassId, subst: Subst) -> None:
         self.egraph = egraph
@@ -82,19 +85,38 @@ class EGraphBuilder:
         self,
         op: str,
         inputs: list[Any],
+        shape: tuple[int, ...] | None = None,
+        dtype: int | None = None,
         attrs: dict[str, Any] | None = None,
     ) -> EClassId:
-        return self.egraph.add(
+        input_cids = tuple(_as_cid(value) for value in inputs)
+        cid = self.egraph.add(
             ENode(
                 op,
-                tuple(_as_cid(value) for value in inputs),
+                input_cids,
                 attrs=tuple((attrs or {}).items()),
             )
         )
+        if shape is not None or dtype is not None:
+            self.egraph.update_analysis(
+                cid,
+                AnalysisData(shape=shape, dtype=dtype),
+            )
+        return cid
 
-    def add_scalar(self, value: float, name: str = "") -> EClassId:
-        arr = np.array(value, dtype=np.float32)
-        return self.add_array(arr, name=name or f"__const_{value}", dtype_code=1)
+    def get_dtype(self, var: str):
+        return self.egraph.eclass(self.subst[var]).data.dtype
+
+
+    def add_scalar(self, value: float, var: str, name: str = "") -> EClassId:
+        dtype = self.get_dtype(var)
+        if dtype is None:
+            raise Exception(f'[ERROR]: dtype is None. var -> {var}')
+
+        np_dtype = onnx.helper.tensor_dtype_to_np_dtype(dtype)
+        arr = np.array(value, dtype=np_dtype)
+        return self.add_array(arr, name=name or f"__const_{value}", dtype_code=dtype)
+
 
     def add_array(
         self,
@@ -157,8 +179,15 @@ class EGraphBuilder:
                     return attr_value
         return None
 
-    def get_match(self) -> EClassId:
+    def get_match(self, fn: str = "", reason: str = "") -> EClassId:
+        EGraphBuilder.fallback_count += 1
+        if fn:
+            by_fn = EGraphBuilder.fallback_reasons.setdefault(fn, {})
+            by_fn[reason] = by_fn.get(reason, 0) + 1
         return self.match_cid
+
+    def get_opset_version(self) -> int:
+        return getattr(self.egraph, "opset_version", 18)
 
 
 def _as_cid(value: Any) -> EClassId:
