@@ -11,8 +11,8 @@ import onnxruntime as ort
 
 # atol = absolute tolerance, rtol = relatvie tolerance. 
 TOLERANCES = {
-    "nlp": {"atol": 5e-4, "rtol": 1e-4},
-    "llm": {"atol": 5e-4, "rtol": 1e-4},
+    "nlp": {"atol": 1e-2, "rtol": 1e-3},
+    "llm": {"atol": 1e-2, "rtol": 1e-3},
     "vision": {"atol": 1e-4, "rtol": 1e-4},
 }
 

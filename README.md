@@ -63,20 +63,22 @@ These shape-construction operators must be removed or lowered by rewrite rules.
 
 ### Results
 
-Current baseline results with `Range`, `Shape`, and `Unsqueeze` excluded from
-the LLM contract:
+`max_nodes`는 IR 크기에 비례하여 자동 설정된다 (`max(ir_nodes * 5, 2000)`).
+이 설정으로 모든 모델에서 ILP가 optimal에 도달한다.
 
-| Model | Baseline nodes | Illegal ops | Correctness |
-| --- | ---: | ---: | --- |
-| tinyllama_15m | 780 | 63 (`Shape` 47, `Unsqueeze` 16) | OK |
-| smollm_135m | 3167 | 197 (`Range` 1, `Shape` 127, `Unsqueeze` 69) | OK |
-| pythia_70m | 624 | 43 (`Shape` 27, `Unsqueeze` 16) | OK |
-| mobilenetv2 | 103 | 0 | OK |
-| mobilevit_xxs | 600 | 0 | OK |
-| yolo26_nano | 400 | 0 | OK |
+| Model | Baseline ops | Superopt ops | Delta | Illegal | Correctness |
+| --- | ---: | ---: | ---: | ---: | --- |
+| tinyllama_15m | 780 | 717 | -63 | 63 (`Shape` 47, `Unsqueeze` 16) | OK |
+| smollm_135m | 3167 | 3227 | +60 | 197 (`Range` 1, `Shape` 127, `Unsqueeze` 69) | OK |
+| pythia_70m | 624 | 625 | +1 | 43 (`Shape` 27, `Unsqueeze` 16) | OK |
+| mobilenetv2 | 103 | 100 | -3 | 0 | OK |
+| mobilevit_xxs | 600 | 576 | -24 | 0 | OK |
+| yolo26_nano | 400 | 397 | -3 | 0 | OK |
 
-The current blocker is LLM shape-flow legalization. Vision models satisfy the
-current vision contract under the IR baseline.
+Vision 모델은 superopt가 baseline보다 같거나 적은 op 수를 달성한다.
+LLM 모델은 동적 shape으로 인해 `shape_fold`, `unsqueeze_to_reshape` 등의
+legalization 규칙이 적용되지 않아 illegal op이 남는다. 이는 baseline과 동일한
+한계이며, shape-flow legalization이 현재 blocker이다.
 
 ## Evaluation
 
@@ -88,7 +90,7 @@ Correctness와 ONNX Runtime CPU 기준으로 측정하며, performance는 graph�
 | 항목 | 의미 |
 | --- | --- |
 | Contract result | unsupported op가 남았는지 |
-| Correctness | output count, shape, dtype, value tolerance |
+| Correctness | output count, shape, dtype, value tolerance (NLP: atol=1e-2, vision: atol=1e-4) |
 | Estimated cost | extraction heuristic 값. 최종 성능값으로 보지 않는다. |
 
 ## Usage
