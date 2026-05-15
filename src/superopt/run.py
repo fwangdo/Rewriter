@@ -34,7 +34,7 @@ def main() -> None:
         help="Supported-op contract (default: vision)",
     )
     parser.add_argument("--max-iter", type=int, default=15)
-    parser.add_argument("--max-nodes", type=int, default=50_000)
+    parser.add_argument("--max-nodes", type=int, default=None)
     parser.add_argument("--ilp-time-limit", type=float, default=600,
                         help="ILP solver time limit in seconds (default: 600)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")

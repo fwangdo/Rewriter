@@ -12,14 +12,14 @@ import onnx
 
 from src.common.validation.correctness import validate_correctness
 
-# (domain, name, max_iter, max_nodes)
+# (domain, name, max_iter)
 MODELS = [
-    ("nlp", "tinyllama_15m", 15, 50_000),
-    ("nlp", "smollm_135m", 15, 50_000),
-    ("nlp", "pythia_70m", 15, 50_000),
-    ("vision", "mobilenetv2", 15, 50_000),
-    ("vision", "mobilevit_xxs", 15, 50_000),
-    ("vision", "yolo26_nano", 15, 50_000),
+    ("nlp", "tinyllama_15m", 15),
+    ("nlp", "smollm_135m", 15),
+    ("nlp", "pythia_70m", 15),
+    ("vision", "mobilenetv2", 15),
+    ("vision", "mobilevit_xxs", 15),
+    ("vision", "yolo26_nano", 15),
 ]
 
 # Map domain to supported ops contract
@@ -96,7 +96,7 @@ def run_baseline(model_path: str, output_path: Path, domain: str):
 
 
 def run_superopt(model_path: str, output_path: str, domain: str,
-                 max_iter: int = 15, max_nodes: int = 50_000,
+                 max_iter: int = 15,
                  ilp_time_limit_s: float | None = 600):
     """Run superopt pipeline, return op counts."""
     from dataclasses import asdict
@@ -106,7 +106,7 @@ def run_superopt(model_path: str, output_path: str, domain: str,
     t0 = time.time()
     result = superoptimize(
         model_path, output_path, supported,
-        max_iter=max_iter, max_nodes=max_nodes,
+        max_iter=max_iter,
         ilp_time_limit_s=ilp_time_limit_s,
     )
     elapsed = time.time() - t0
@@ -137,7 +137,7 @@ def main():
     root = Path(__file__).resolve().parent.parent.parent
     results = []
 
-    for domain, name, max_iter, max_nodes in MODELS:
+    for domain, name, max_iter in MODELS:
         model_path = root / f"benchmarks/onnx/{domain}/{name}/onnx/model.onnx"
         baseline_path = _make_rewritten_model_path(root, name, "baseline")
         superopt_path = _make_rewritten_model_path(root, name, "superopt")
@@ -147,7 +147,7 @@ def main():
             continue
 
         print(f"\n{'='*60}")
-        print(f"  {domain}/{name}  (max_iter={max_iter}, max_nodes={max_nodes})")
+        print(f"  {domain}/{name}  (max_iter={max_iter})")
         print(f"{'='*60}")
 
         bl = None
@@ -173,7 +173,7 @@ def main():
             print("  [superopt] running...")
             try:
                 so = run_superopt(str(model_path), str(superopt_path), domain,
-                                  max_iter=max_iter, max_nodes=max_nodes,
+                                  max_iter=max_iter,
                                   ilp_time_limit_s=args.ilp_time_limit)
                 so_correctness = _validate_candidate(model_path, superopt_path, domain)
                 print(
