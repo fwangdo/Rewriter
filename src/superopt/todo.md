@@ -75,22 +75,62 @@ depth 2~3 패턴 매칭이므로 5000 e-node에서도 충분히 빠름.
 
 nota 과제가 정확히 이 상황 — "이 HW에서 이 op만 됩니다, 모델 바꿔주세요"를 자동화.
 
-### 0.6 선결 과제
+### 0.6 Primitive IR 설계
 
-1. **Primitive IR 설계**: ONNX op을 분해할 primitive op set 정의
-   - 후보: `broadcast_mul`, `reduce_sum`, `broadcast_add`, `reshape`, `transpose`, `select`, `scatter` 등
-   - ONNX op 자체를 더 세분화하는 타협도 가능 (예: Conv → im2col + MatMul + Reshape, 전부 ONNX op)
+**출발점: STENSO grammar + TASO axioms**
+
+STENSO (Figure 3)의 NumPy-level grammar (~20 ops)이 기본 골격:
+- `tensordot` (= `reduce_sum + broadcast_mul`): MatMul, Conv, Gemm을 통합 표현
+- elementwise: `add, sub, mul, div, neg, sqrt, exp, log, pow`
+- 구조: `reshape, transpose, sum (reduce)`
+- 조건: `where, less, equal`
+- 생성: `full, triu, tril`
+
+DNN 커버를 위해 추가 필요:
+- `reduce_max` (MaxPool, Softmax 분해)
+- `slice`, `pad` (stride, padding 표현)
+- `broadcast_mul`, `broadcast_add` (broadcast 명시)
+
+**TASO Table 2의 43개 operator property가 e-graph axiom 후보:**
+- `matmul is associative`
+- `conv is bilinear`
+- `add/mul commutativity, distributivity`
+- 이걸 Z3 검증용이 아닌 e-graph rewrite rule로 직접 사용
+
+**Gather 분해 예시:**
+```
+Gather(X[D,...], indices[N], axis=0)
+= MatMul(one_hot(indices, D), X)
+= reduce_sum(broadcast_mul(one_hot(indices), X), axis=d)
+```
+→ 산술 primitive로 분해 가능. "더 이상 내릴 곳 없는" primitive op은 거의 없음.
+
+### 0.7 Rule Generation의 누적 효과
+
+e-graph saturation을 반복할수록 발견된 equivalence가 쌓임:
+- 1회차: `MatMul ↔ Conv1x1` (primitive에서 만남)
+- 2회차: 이 equivalence를 활용해 더 큰 subgraph의 변환 발견
+- N회차: high-level fusion rule이 자동 emerge
+
+시간이 걸리더라도 탐색할수록 rule이 풍부해지는 구조.
+수동 rule 작성은 선형 비용이지만, 이 방식은 발견이 복리로 누적됨.
+
+### 0.8 선결 과제
+
+1. **Primitive IR 구현**: STENSO grammar 기반 op set 정의 + e-graph 노드로 표현
 2. **Lowering 정의**: 주요 ONNX op 10~20개의 primitive 분해 (ONNX spec reference impl 참조)
-3. **E-graph 연동**: 기존 e-graph 인프라에 primitive IR 노드 추가
-4. **Lifting pattern**: lowering 정의의 역방향 tree pattern matcher 구현
+3. **Axiom set**: TASO Table 2 기반 primitive level rewrite rule 등록
+4. **Lifting pattern**: lowering 정의의 역방향 tree pattern matcher (LLVM instruction selection 참조)
 5. **PoC 검증**: QNN contract 기준 illegal op 하나에 대해 end-to-end 자동 변환 시연
 
-### 0.7 참고 연구
+### 0.9 참고 연구
 
-- **TASO (SOSP'19)**: subgraph enumeration + fingerprint + Z3 → 743 rules 자동 생성. 자체 IR, 4 ops 한계.
-- **Trinity (ASPLOS'26)**: tile-level primitive axiom → e-graph saturation으로 FlashAttention 자동 발견. "촘촘한 primitive rule이면 e-graph으로 complex optimization이 emerge"를 실증.
-- **STENSO**: symbolic execution + sketch synthesis. solver 기반, 소규모 kernel.
-- **LLVM**: lowering → optimization → instruction selection 구조의 원형.
+| 연구 | 기여 | 우리가 취할 것 |
+|---|---|---|
+| **TASO** (SOSP'19) | subgraph enum + fingerprint + Z3 → 743 rules 자동 생성 | Table 2의 43 axioms을 e-graph rule로 |
+| **Trinity** (ASPLOS'26) | tile-level primitive + e-graph → FlashAttention 자동 발견 | "촘촘한 primitive면 complex opt가 emerge" 실증 |
+| **STENSO** | NumPy grammar ~20 ops + symbolic synthesis | grammar를 primitive IR 출발점으로 |
+| **LLVM** | lowering → opt → instruction selection | 전체 파이프라인 구조의 원형 |
 
 ---
 
