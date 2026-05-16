@@ -115,13 +115,66 @@ e-graph saturation을 반복할수록 발견된 equivalence가 쌓임:
 시간이 걸리더라도 탐색할수록 rule이 풍부해지는 구조.
 수동 rule 작성은 선형 비용이지만, 이 방식은 발견이 복리로 누적됨.
 
-### 0.8 선결 과제
+### 0.8 Symbolic Shape으로 Rule 생성
 
-1. **Primitive IR 구현**: STENSO grammar 기반 op set 정의 + e-graph 노드로 표현
-2. **Lowering 정의**: 주요 ONNX op 10~20개의 primitive 분해 (ONNX spec reference impl 참조)
-3. **Axiom set**: TASO Table 2 기반 primitive level rewrite rule 등록
-4. **Lifting pattern**: lowering 정의의 역방향 tree pattern matcher (LLVM instruction selection 참조)
-5. **PoC 검증**: QNN contract 기준 illegal op 하나에 대해 end-to-end 자동 변환 시연
+concrete instance에서 rule을 요약하면 shape disambiguation 문제 발생:
+- `MatMul(A[128,128], B[128,128])` → 128이 M/K/N 중 어느 건지?
+- `Reshape([N,C,H,W] → [N,C,H*W])` → H*W=196이 14×14인지 7×28인지?
+
+**해법: 처음부터 symbolic으로 수행.**
+```
+MatMul(A[M,K], B[K,N]) → reduce_sum(broadcast_mul(A[M,K], B[K,N]), axis=K)
+```
+primitive axiom은 shape 값에 의존하지 않으므로 symbolic 상태로 saturation 가능.
+shape constraint는 lifting 시점에만 체크.
+concrete→abstract 요약 문제가 아예 없음.
+
+### 0.9 구현 계획
+
+#### Phase 1: Primitive IR 재설계
+- [ ] Primitive op을 **class로** 정의 (문자열 아님)
+  ```python
+  class ReduceSum(PrimitiveOp):
+      input: EClassId
+      axis: int | Symbol
+
+  class BroadcastMul(PrimitiveOp):
+      lhs: EClassId
+      rhs: EClassId
+
+  class Reshape(PrimitiveOp):
+      input: EClassId
+      shape: tuple[int | Symbol, ...]
+  ```
+- [ ] STENSO grammar 기반 20~30개 primitive op class 정의
+- [ ] Python `match` statement으로 패턴 매칭 가능한 구조
+- [ ] symbolic shape 지원 (Shape variable: M, K, N 등)
+
+#### Phase 2: Lowering (ONNX → Primitive)
+- [ ] 주요 ONNX op 10~20개의 symbolic lowering 정의
+  - MatMul, Conv, Gemm, Softmax, LayerNorm, BatchNorm,
+    Gather, Transpose, Reshape, Squeeze, Unsqueeze, ...
+- [ ] ONNX spec reference implementation 참조하여 기계적 도출
+- [ ] lowering 정의 = lifting pattern의 역 (한 번만 작성)
+
+#### Phase 3: Axiom Set + E-Graph Saturation
+- [ ] TASO Table 2 기반 primitive axiom 등록
+  - commutativity, associativity, distributivity
+  - reshape composition, transpose composition
+- [ ] small scope saturation (illegal op 하나 + 주변 subgraph)
+- [ ] max_nodes=1000 수준에서 동작 확인
+
+#### Phase 4: Lifting (Primitive → ONNX)
+- [ ] tree pattern matcher 구현 (depth 2~3)
+  - lowering 정의를 뒤집어서 자동 생성
+  - e-class를 타고 내려가며 구조 확인
+- [ ] shape constraint 체크 (axis, channel 등)
+- [ ] supported op set에 있는 pattern만 매칭
+
+#### Phase 5: PoC End-to-End
+- [ ] QNN contract 기준 illegal op 하나에 대해 자동 변환 시연
+- [ ] correctness: observational equivalence (random input)
+- [ ] rule discovery loop: 발견 → 등록 → 적용 → 검증 → 반복
 
 ### 0.9 참고 연구
 
