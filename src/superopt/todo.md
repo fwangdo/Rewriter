@@ -1,5 +1,33 @@
 # Superopt TODO
 
+## 0. New Goal: Automated Rule Discovery via E-Graph
+
+수동 rule 작성의 한계를 넘기 위해, e-graph 기반 자동 rule 탐색 루프를 구축한다.
+
+**핵심 루프:**
+1. **Challenge 정의** — target contract (QNN, TIDL 등)에서 illegal op 식별
+2. **Rule search** — illegal op 포함 subgraph를 primitive level로 분해 → e-graph saturation으로 legal equivalent 탐색
+3. **Rule 등록 + 적용** — 발견된 substitution을 ONNX level rule로 올려서 전체 그래프에 적용
+4. **검증** — correctness (random input 비교) + legality (contract 재확인)
+5. → 남은 illegal이 있으면 1로 돌아감
+
+**참고 연구:**
+- TASO (SOSP'19): subgraph enumeration + fingerprint equivalence + Z3 verification → 743 rules 자동 생성
+- Trinity (ASPLOS'26): tile-level primitive axiom (distributivity, associativity, load/store fusion) → e-graph saturation으로 FlashAttention급 최적화 자동 발견
+- STENSO: symbolic execution + sketch synthesis (solver 기반, 소규모 kernel에 적용)
+
+**우리의 접근:**
+- TASO의 enumerate+verify보다 탐색 범위가 넓음 (e-graph 기반)
+- Trinity보다 실용적 (전체 그래프가 아니라 illegal subgraph만 타겟 → scope 관리 가능)
+- Solver 호출 대신 observational equivalence (random input 비교)로 빠르게 검증, 필요 시 formal verification 추가
+
+**선결 과제:**
+- ONNX op을 한 단계 아래 IR (einsum/index notation 등)로 분해하는 layer 설계
+- 해당 IR에서 촘촘한 primitive axiom 정의
+- Illegal subgraph 추출 → scoped e-graph saturation → ONNX level로 lift하는 파이프라인
+
+---
+
 현재 핵심 문제는 e-graph 구현 자체보다 rewrite rule set이 아직 얇다는 점이다.
 지금 규칙은 "ONNX op를 다른 op 조합으로 낮추는 legalization pack"에 가깝고,
 e-graph가 여러 좋은 대안을 탐색할 만큼 optimization rule이 충분하지 않다.
