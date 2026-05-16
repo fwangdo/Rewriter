@@ -1,30 +1,96 @@
 # Superopt TODO
 
-## 0. New Goal: Automated Rule Discovery via E-Graph
+## 0. New Goal: Compiler-Style Automated Legalization
 
-수동 rule 작성의 한계를 넘기 위해, e-graph 기반 자동 rule 탐색 루프를 구축한다.
+수동 rule 작성(peephole optimization)을 넘어, 컴파일러 정석 구조로 legality 문제를 자동 해결한다.
 
-**핵심 루프:**
-1. **Challenge 정의** — target contract (QNN, TIDL 등)에서 illegal op 식별
-2. **Rule search** — illegal op 포함 subgraph를 primitive level로 분해 → e-graph saturation으로 legal equivalent 탐색
-3. **Rule 등록 + 적용** — 발견된 substitution을 ONNX level rule로 올려서 전체 그래프에 적용
-4. **검증** — correctness (random input 비교) + legality (contract 재확인)
-5. → 남은 illegal이 있으면 1로 돌아감
+### 0.1 핵심 구조: Lowering → Saturation → Lifting
 
-**참고 연구:**
-- TASO (SOSP'19): subgraph enumeration + fingerprint equivalence + Z3 verification → 743 rules 자동 생성
-- Trinity (ASPLOS'26): tile-level primitive axiom (distributivity, associativity, load/store fusion) → e-graph saturation으로 FlashAttention급 최적화 자동 발견
-- STENSO: symbolic execution + sketch synthesis (solver 기반, 소규모 kernel에 적용)
+LLVM의 컴파일 구조와 동형:
 
-**우리의 접근:**
-- TASO의 enumerate+verify보다 탐색 범위가 넓음 (e-graph 기반)
-- Trinity보다 실용적 (전체 그래프가 아니라 illegal subgraph만 타겟 → scope 관리 가능)
-- Solver 호출 대신 observational equivalence (random input 비교)로 빠르게 검증, 필요 시 formal verification 추가
+| LLVM | 우리 |
+|---|---|
+| C → LLVM IR (lowering) | ONNX op → primitive IR (lowering) |
+| LLVM IR 최적화 (pass) | primitive IR에서 e-graph saturation |
+| LLVM IR → machine inst (instruction selection) | primitive IR → ONNX op (lifting = pattern matching) |
 
-**선결 과제:**
-- ONNX op을 한 단계 아래 IR (einsum/index notation 등)로 분해하는 layer 설계
-- 해당 IR에서 촘촘한 primitive axiom 정의
-- Illegal subgraph 추출 → scoped e-graph saturation → ONNX level로 lift하는 파이프라인
+**Lowering**: 모든 ONNX op을 primitive op으로 분해.
+```
+MatMul(A,B)  := reduce_sum(broadcast_mul(A, B), axis=k)
+Conv1x1(X,W) := reduce_sum(broadcast_mul(X, W), axis=c)
+```
+
+**Saturation**: primitive level에서 e-graph가 등가 표현을 탐색.
+동일한 `reduce_sum(broadcast_mul(...))` 패턴으로 분해되면 MatMul과 Conv가 자동으로 같은 e-class에 합류.
+
+**Lifting**: lowering 정의를 뒤집어서 primitive 패턴 → ONNX op 인식 (tree pattern matching).
+lowering이 정의되면 lifting은 자명. 추가 작업 아님.
+
+### 0.2 기존 방식 대비 이점
+
+**수동 rule 작성 (기존):**
+- unsupported op m개 × "어떤 supported op 조합으로?" = 매번 사람이 탐색
+- op 간 변환 발견이 어렵고 누락 위험
+- 새 HW contract마다 rule set 재작성
+
+**Lowering 기반 (새 방식):**
+- 각 ONNX op의 lowering 정의 N개만 필요 (ONNX spec reference impl에서 기계적 도출 가능)
+- op 간 equivalence는 e-graph saturation에서 자동 발견
+- contract이 바뀌어도 supported op set만 교체하면 됨
+
+방향이 뒤집힘:
+- 기존: "이 illegal op을 뭘로 바꾸지?" (탐색 필요)
+- 새 방식: "primitive로 내려간 뒤, legal op 중 매칭되는 게 있나?" (매칭만)
+
+### 0.3 Solver-Free 구조
+
+**ILP extraction 불필요** — legality만 따지면 최적화 문제가 아니라 feasibility 문제.
+e-graph에서 supported op으로 lifting 가능한 조합이 하나라도 있으면 해결.
+
+**Z3 verification 불필요** — correctness는 observational equivalence (random input 비교)로 충분.
+TASO가 enumerate + Z3로 나눠서 한 걸, e-graph saturation이 한 번에 처리.
+
+**Scope이 작음** — illegal op 하나 (+ 주변 subgraph)만 e-graph에 넣으므로:
+- saturation 빠름 (max_nodes=1000이면 충분)
+- TASO의 4 ops 한계를 넘어 깊은 equivalence 탐색 가능
+
+### 0.4 Lifting = Tree Pattern Matching
+
+primitive 조합을 ONNX op으로 인식하는 건 단순 hash lookup이 아니라 tree pattern matching.
+```
+reduce_sum                 ← depth 0
+  └─ broadcast_mul         ← depth 1
+       ├─ A
+       └─ B
+```
+축과 shape에 따라 MatMul, Conv, AvgPool 등으로 달라짐.
+이건 컴파일러의 instruction selection과 동일한 문제 — LLVM TableGen이 이미 풀어놓음.
+depth 2~3 패턴 매칭이므로 5000 e-node에서도 충분히 빠름.
+
+### 0.5 실용적 가치
+
+칩 회사 시나리오: 새 NPU마다 supported op set이 달라짐.
+- 현재: 엔지니어가 매번 수동 변환 rule 작성
+- 이 도구: contract (supported op set)만 넣으면 변환이 자동 생성
+
+nota 과제가 정확히 이 상황 — "이 HW에서 이 op만 됩니다, 모델 바꿔주세요"를 자동화.
+
+### 0.6 선결 과제
+
+1. **Primitive IR 설계**: ONNX op을 분해할 primitive op set 정의
+   - 후보: `broadcast_mul`, `reduce_sum`, `broadcast_add`, `reshape`, `transpose`, `select`, `scatter` 등
+   - ONNX op 자체를 더 세분화하는 타협도 가능 (예: Conv → im2col + MatMul + Reshape, 전부 ONNX op)
+2. **Lowering 정의**: 주요 ONNX op 10~20개의 primitive 분해 (ONNX spec reference impl 참조)
+3. **E-graph 연동**: 기존 e-graph 인프라에 primitive IR 노드 추가
+4. **Lifting pattern**: lowering 정의의 역방향 tree pattern matcher 구현
+5. **PoC 검증**: QNN contract 기준 illegal op 하나에 대해 end-to-end 자동 변환 시연
+
+### 0.7 참고 연구
+
+- **TASO (SOSP'19)**: subgraph enumeration + fingerprint + Z3 → 743 rules 자동 생성. 자체 IR, 4 ops 한계.
+- **Trinity (ASPLOS'26)**: tile-level primitive axiom → e-graph saturation으로 FlashAttention 자동 발견. "촘촘한 primitive rule이면 e-graph으로 complex optimization이 emerge"를 실증.
+- **STENSO**: symbolic execution + sketch synthesis. solver 기반, 소규모 kernel.
+- **LLVM**: lowering → optimization → instruction selection 구조의 원형.
 
 ---
 
