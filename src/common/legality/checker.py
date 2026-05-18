@@ -24,10 +24,17 @@ class LegalitySignal(Enum):
 
 # rules. 
 def _check_gather(node: onnx.NodeProto) -> LegalitySignal:
-    return 
+    # should be positive indices. 
+    index = node.input[1]
+
+    if index >= 0: 
+        return 
+    else: 
+        return 
 
 
 def _check_lp_norm(node: onnx.NodeProto) -> LegalitySignal:
+    # p should be 2.  
     return 
 
 
@@ -55,12 +62,16 @@ def check_legality(node: onnx.NodeProto) -> LegalitySignal:
 
 def _organize_res(res: LegalitySignal, node: onnx.NodeProto, lr) -> None:
     return 
-    
 
-def run(model: onnx.ModelProto) -> LegalityResult:
+
+def run(model: onnx.ModelProto) -> tuple[LegalityResult, dict[str, onnx.NodeProto]]:
     lr = LegalityResult({}, {}, {})
+    illegal: dict[str, onnx.NodeProto] = dict()
+
     for node in model.graph.node:
         res = check_legality(node)
         _organize_res(res, node, lr)
+        if (res != LegalitySignal.LEGAL):
+            illegal[node.name] = node
         
-    return lr  
+    return lr, illegal

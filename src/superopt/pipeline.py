@@ -125,6 +125,11 @@ def _attach_initializers(opt_ir: IRGraph, source_ir: IRGraph) -> None:
             opt_ir.add_initializer(name, source_ir.initializers[name])
             continue
 
+        source_name = node.attrs_dict.get("__name__")
+        if source_name in source_ir.initializers:
+            opt_ir.add_initializer(name, source_ir.initializers[source_name])
+            continue
+
         # Synthetic weights created by legalization apply_fn carry a
         # __synth__ attr with (dtype_str, shape, bytes).
         synth = node.attrs_dict.get("__synth__")

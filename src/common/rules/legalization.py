@@ -359,19 +359,31 @@ def _build_layernorm_decompose(builder: GraphBuilder, vars: dict[str, object]) -
     else:
         reduced_shape = None
 
-    axes = builder.add_array(np.array([axis], dtype=np.int64), f"__ln_axes_{axis}", dtype_code=7)
+    axes_attr = [axis]
+    reduce_mean_attrs = {"keepdims": 1}
+    if builder.get_opset_version() >= 18:
+        axes = builder.add_array(np.array(axes_attr, dtype=np.int64), f"__ln_axes_{axis}", dtype_code=7)
+        mean_inputs = [vars["?x"], axes]
+    else:
+        mean_inputs = [vars["?x"]]
+        reduce_mean_attrs["axes"] = tuple(axes_attr)
+
     # epsilon is always float32: variance is a floating-point quantity.
     eps = builder.add_scalar_float(epsilon, name=f"__ln_eps_{epsilon}")
-    mean = builder.add_op("ReduceMean", [vars["?x"], axes],
+    mean = builder.add_op("ReduceMean", mean_inputs,
                           shape=reduced_shape, dtype=x_dtype,
-                          attrs={"keepdims": 1})
+                          attrs=reduce_mean_attrs)
     centered = builder.add_op("Sub", [vars["?x"], mean],
                               shape=x_shape, dtype=x_dtype)
     squared = builder.add_op("Mul", [centered, centered],
                              shape=x_shape, dtype=x_dtype)
-    var = builder.add_op("ReduceMean", [squared, axes],
+    if builder.get_opset_version() >= 18:
+        var_inputs = [squared, axes]
+    else:
+        var_inputs = [squared]
+    var = builder.add_op("ReduceMean", var_inputs,
                          shape=reduced_shape, dtype=x_dtype,
-                         attrs={"keepdims": 1})
+                         attrs=reduce_mean_attrs)
     var_eps = builder.add_op("Add", [var, eps],
                              shape=reduced_shape, dtype=x_dtype)
     std = builder.add_op("Sqrt", [var_eps],

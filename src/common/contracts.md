@@ -1,95 +1,175 @@
-# Backend Operator Contracts
+# Backend Operator Contract
 
-This document records backend-style operator contracts that are more precise
-than a plain supported-op set.  The Python constants in `contracts.py` are still
-simple op pools; this file is for future predicate-based legality modeling.
+This document uses Qualcomm ONNX Runtime QNN Execution Provider as the
+reference backend contract.  The Python constants in `contracts.py` are still
+plain op pools; this document records the backend assumptions that should later
+be modeled as legality predicates.
 
-## TI TIDL / TVM 11.2 Contract
+## Qualcomm QNN Execution Provider
 
-Source: <https://software-dl.ti.com/codegen/docs/tvm/tvm_tidl_users_guide/supported-operators.html>
+Source:
+<https://github.com/onnxruntime/onnxruntime-qnn/blob/main/docs/execution_providers/QNN-ExecutionProvider.md#supported-onnx-operators>
 
-TI TVM partitions an ONNX model between:
+QNN EP lowers ONNX graphs through ONNX Runtime into Qualcomm AI Runtime
+(QAIRT/QNN).  The main accelerator target is the HTP backend.  The CPU backend
+is a reference implementation and should not be treated as the performance
+target.
 
-- TIDL-supported layers, accelerated by the C7 NPU.
-- Non-TIDL layers, handled by TVM-generated C7 code or Arm fallback.
+Important modeling points:
 
-This means the contract is not just "op is supported"; many ops are supported
-only under attribute, shape, dtype, or placement constraints.
+- QNN EP can fall back to CPU unless CPU fallback is disabled.
+- HTP supports both floating-point and quantized flows, but operator dtype
+  support varies by op and backend.
+- Dynamic shapes are not supported for HTP execution; symbolic input shapes
+  must be fixed before deployment.
+- The ONNX op list is a first approximation.  Full legality also depends on
+  dtype, shape, rank, attributes, quantization form, and backend selection.
 
-### Core Compute
+## Supported ONNX Operator Pool
 
-| ONNX op | Backend layer | Key legality constraints |
-|---|---|---|
-| `Conv` | `TIDL_ConvolutionLayer` | horizontal/vertical stride must match; kernel/stride combinations are limited; dilation constraints apply |
-| `ConvTranspose` | `TIDL_Deconv2DLayer` | limited kernel set; default dilation only |
-| `Gemm`, `MatMul` | `TIDL_InnerProductLayer` | `Gemm`: `transA=0`, `alpha=1.0`, `beta=1.0`; bias must be `[1,N]` or `[N]`; some mixed signed/unsigned `MatMul` cases unsupported |
-| `BatchNormalization` | `TIDL_BatchNormLayer` | `training_mode=1` unsupported; scale/bias/mean/variance must be constant 1-D tensors |
-| `LayerNormalization` | `TIDL_LayerNormLayer` | width axis only; scale and bias must be `[1,N]` or `[N]` |
+The following pool is derived from the QNN EP supported ONNX operators list.
+It is intentionally represented as an op-name pool here; predicate-level
+constraints should be added separately.
 
-### Elementwise And Activations
+### Tensor Arithmetic And Logic
 
-| ONNX op | Backend layer | Key legality constraints |
-|---|---|---|
-| `Add`, `Sub`, `Mul`, `Div`, `Max`, `Min`, `Sum` | `TIDL_EltWiseLayer` | exactly two inputs; dimensions must match or be broadcastable |
-| `Pow` | `TIDL_PowLayer` | exponent must be a constant scalar tensor |
-| `Clip` | `TIDL_ClipLayer` | `min <= 0` and `max > 0` only |
-| `Softmax` | `TIDL_SoftMaxLayer` | width and height axes only |
-| `Relu`, `PRelu`, `LeakyRelu`, `Sigmoid`, `Tanh`, `HardSigmoid`, `HardSwish`, `Elu`, `Mish` | activation layers | op-specific broadcast/parameter constraints may apply |
-| `Abs`, `Neg`, `Sqrt`, `Exp`, `Log`, `Floor` | scalar/math layers | supported as standalone math ops |
+| ONNX op |
+|---|
+| `Abs` |
+| `Add` |
+| `And` |
+| `Asin` |
+| `Atan` |
+| `Ceil` |
+| `Cos` |
+| `Div` |
+| `Elu` |
+| `Equal` |
+| `Exp` |
+| `Floor` |
+| `Greater` |
+| `GreaterOrEqual` |
+| `Less` |
+| `LessOrEqual` |
+| `Log` |
+| `Max` |
+| `Mean` |
+| `Min` |
+| `Mod` |
+| `Mul` |
+| `Neg` |
+| `Not` |
+| `Or` |
+| `Pow` |
+| `Reciprocal` |
+| `Round` |
+| `Sign` |
+| `Sin` |
+| `Sqrt` |
+| `Sub` |
+| `Sum` |
+| `Tanh` |
+| `Where` |
 
-### Shape And Layout
+### Neural Network Compute
 
-| ONNX op | Backend layer | Key legality constraints |
-|---|---|---|
-| `Reshape` | `TIDL_ReshapeLayer` | variable shape unsupported; input/output volume must match |
-| `Flatten` | `TIDL_FlattenLayer` | supported |
-| `Squeeze` | `TIDL_SqueezeLayer` | supported |
-| `Unsqueeze` | `TIDL_UnsqueezeLayer` | output rank must be <= 6 |
-| `Transpose` | `TIDL_TransposeLayer` | for rank > 4, some width-dimension permutations are unsupported |
-| `Concat` | `TIDL_ConcatLayer` | axis values `-3`, `-2`, `-1` only; batch axis unsupported |
-| `Slice`, `Split` | `TIDL_SliceLayer` | 4-D input only; batch size must be 1; non-unit stride is limited |
-| `Pad` | `TIDL_PadLayer` | constant pad mode with zero value only; width/height axes only |
-| `Expand` | `TIDL_ExpandLayer` | shape tensor must be constant |
+| ONNX op | Notes |
+|---|---|
+| `AveragePool` |  |
+| `BatchNormalization` | fp16 supported since QNN EP 1.18.0 |
+| `Clip` | fp16 supported since QNN EP 1.18.0 |
+| `Conv` | 3D supported since QNN EP 1.18.0 |
+| `ConvTranspose` | 3D supported since QNN EP 1.18.0 |
+| `Gelu` |  |
+| `Gemm` |  |
+| `GlobalAveragePool` |  |
+| `GlobalMaxPool` |  |
+| `GridSample` |  |
+| `HardSigmoid` |  |
+| `HardSwish` |  |
+| `InstanceNormalization` |  |
+| `LRN` |  |
+| `LSTM` |  |
+| `LayerNormalization` |  |
+| `LeakyRelu` |  |
+| `LogSoftmax` |  |
+| `LpNormalization` | only `p == 2` |
+| `MatMul` | HTP typed support is limited in the QNN EP note |
+| `MaxPool` |  |
+| `PRelu` | fp16/int32 supported since QNN EP 1.18.0 |
+| `Relu` |  |
+| `Sigmoid` |  |
+| `Softmax` |  |
+| `ThresholdedRelu` |  |
 
-### Indexing, Reduction, Quantization
+### Shape, Layout, Indexing
 
-| ONNX op | Backend layer | Key legality constraints |
-|---|---|---|
-| `Gather` | `TIDL_GatherLayer` | indices must be 1-D; input rank must be > 1; data cannot be constant; only indices can be constant |
-| `ScatterND`, `ScatterElements` | scatter layer | limited reductions/axes; input data must be a zero tensor |
-| `ReduceMean`, `ReduceSum` | reduction layers | supported |
-| `ReduceMin`, `ReduceMax` | reduction layer | height axis only; `keepdims=1` only |
-| `ArgMin`, `ArgMax` | arg layer | `keepdims=1`; axis `-3` only |
-| `Cast` | `TIDL_CastLayer` | terminal nodes only |
-| `QuantizeLinear`, `DequantizeLinear` | quantization layers | QDQ models only; axis constraints apply |
+| ONNX op | Notes |
+|---|---|
+| `ArgMax` |  |
+| `ArgMin` |  |
+| `Cast` |  |
+| `Concat` |  |
+| `CumSum` |  |
+| `DepthToSpace` |  |
+| `Einsum` |  |
+| `Expand` |  |
+| `Flatten` |  |
+| `Gather` | only supports positive indices |
+| `GatherElements` |  |
+| `GatherND` |  |
+| `Inverse` |  |
+| `Pad` |  |
+| `RandomUniformLike` |  |
+| `Resize` |  |
+| `STFT` |  |
+| `ScatterElements` |  |
+| `ScatterND` |  |
+| `Slice` |  |
+| `SpaceToDepth` |  |
+| `Split` |  |
+| `Squeeze` |  |
+| `Tile` |  |
+| `TopK` |  |
+| `Transpose` |  |
+| `Unsqueeze` |  |
+| `Upsample` |  |
 
-### Fusion-Only Operators
+### Quantization And Contrib Ops
 
-| ONNX op | Backend layer | Key legality constraints |
-|---|---|---|
-| `Erf`, `Identity` | `TIDL_IdentityLayer` | accelerated only as part of GELU fusion |
-| `DropOut` | `TIDL_DropOutLayer` | not supported standalone |
+| ONNX op | Notes |
+|---|---|
+| `DequantizeLinear` |  |
+| `QuantizeLinear` |  |
+| `com.microsoft:DequantizeLinear` | 16-bit integer dequantization support |
+| `com.microsoft:Gelu` |  |
+| `com.microsoft:QuantizeLinear` | 16-bit integer quantization support |
+| `com.microsoft.MatMulNBits` | supported bits == 4 on GPU backend |
 
 ## Modeling Notes
 
-This contract cannot be represented accurately as `frozenset[str]`.
-Future legality checks should use op predicates:
+This contract should not remain a raw `frozenset[str]` long term.  The useful
+legality surface is predicate-based:
 
 ```text
-is_supported(node, value_info, initializers) -> bool
+is_supported(node, value_info, initializers, backend) -> bool
 ```
 
 Examples:
 
-- `MatMul` is not merely supported/unsupported; dtype and input type constraints matter.
-- `Cast` is legal only at graph inputs/outputs.
-- `Gather` depends on whether `data` or `indices` are constant.
-- `Concat`, `Slice`, `Softmax`, and reductions depend on axis and rank.
-- `Conv` legality depends on group, dilation, stride, and kernel constraints.
+- `MatMul` is listed, but HTP dtype support is constrained.
+- `Gather` is listed, but only positive indices are supported.
+- `LpNormalization` is listed only for `p == 2`.
+- `BatchNormalization`, `Clip`, `Conv`, `ConvTranspose`, and `PRelu` have
+  version-specific dtype/rank notes.
+- `Shape` and `Range` are not listed in the QNN EP supported ONNX operator
+  pool, so LLM shape-flow rewrites should lower or remove them.
+- `Unsqueeze` is listed by QNN EP, but it may still be useful to eliminate it
+  when targeting a stricter internal contract.
 
-For superoptimization, this implies that the cost model should distinguish:
+For this project, the practical contract should distinguish:
 
-- unsupported op
-- supported op with illegal attributes
-- supported op that falls back outside the intended accelerator path
-- fully accelerated op
+- op not listed by QNN EP
+- op listed but illegal under dtype/shape/attribute constraints
+- op accepted by QNN EP but falling back to CPU
+- op accepted and expected to run on HTP

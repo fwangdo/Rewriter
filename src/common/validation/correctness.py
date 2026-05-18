@@ -83,6 +83,8 @@ def make_inputs(
         if is_int:
             if "position_ids" in inp.name:
                 inputs[inp.name] = np.arange(shape[-1], dtype=np.int64).reshape(shape)
+            elif "token_type_ids" in inp.name:
+                inputs[inp.name] = np.zeros(shape, dtype=np.int64)
             elif "attention_mask" in inp.name:
                 inputs[inp.name] = np.ones(shape, dtype=np.int64)
             else:

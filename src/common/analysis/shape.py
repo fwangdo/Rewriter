@@ -32,22 +32,26 @@ def infer_reduce_mean(
     (output_shape, output_dtype)
     """
     schema = defs.get_schema("ReduceMean", opset_version)
+    node_inputs = ["x", "axes"] if opset_version >= 18 else ["x"]
+    node_attrs = {"keepdims": 1 if keepdims else 0}
+    if opset_version < 18:
+        node_attrs["axes"] = axes
     node = helper.make_node(
         "ReduceMean",
-        inputs=["x", "axes"],
+        inputs=node_inputs,
         outputs=["y"],
-        keepdims=1 if keepdims else 0,
+        **node_attrs,
     )
     axes_array = np.array(axes, dtype=np.int64)
     input_types = {
         "x": helper.make_tensor_type_proto(input_dtype, list(input_shape)),
-        "axes": helper.make_tensor_type_proto(
+    }
+    input_data = {}
+    if opset_version >= 18:
+        input_types["axes"] = helper.make_tensor_type_proto(
             TensorProto.INT64, list(axes_array.shape)
-        ),
-    }
-    input_data = {
-        "axes": numpy_helper.from_array(axes_array, name="axes"),
-    }
+        )
+        input_data["axes"] = numpy_helper.from_array(axes_array, name="axes")
     output_types = shape_inference.infer_node_outputs(
         schema, node, input_types, input_data,
     )

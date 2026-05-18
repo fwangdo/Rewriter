@@ -17,9 +17,14 @@ MODELS = [
     ("nlp", "tinyllama_15m", 15),
     ("nlp", "smollm_135m", 15),
     ("nlp", "pythia_70m", 15),
+    ("nlp", "gte_small", 15),
+    ("nlp", "mobilebert_uncased", 15),
     ("vision", "mobilenetv2", 15),
     ("vision", "mobilevit_xxs", 15),
     ("vision", "yolo26_nano", 15),
+    ("vision", "convnext_tiny", 15),
+    ("vision", "swin_tiny", 15),
+    ("vision", "xcit_tiny", 15),
 ]
 
 # Map domain to supported ops contract

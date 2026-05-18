@@ -100,6 +100,7 @@ def main():
     parser.add_argument("--max-tokens", type=int, default=200)
     args = parser.parse_args()
 
+    # tokenizer for encoding. 
     tok_name = args.tokenizer or _guess_tokenizer(args.model)
     if tok_name is None:
         print("Cannot guess tokenizer. Use --tokenizer to specify.")

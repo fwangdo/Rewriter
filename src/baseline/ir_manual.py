@@ -259,15 +259,13 @@ def _prune_dead_ir(ir: IRGraph) -> None:
     roots = [ir.root] if ir.root is not None else list(ir.output_ids())
     reachable: set[str] = set()
 
-    def visit(value_id: str | None) -> None:
-        if value_id is None or value_id in reachable or value_id not in ir.nodes:
-            return
+    stack = [root for root in roots if root is not None]
+    while stack:
+        value_id = stack.pop()
+        if value_id in reachable or value_id not in ir.nodes:
+            continue
         reachable.add(value_id)
-        for input_id in ir.nodes[value_id].inputs:
-            visit(input_id)
-
-    for root in roots:
-        visit(root)
+        stack.extend(ir.nodes[value_id].inputs)
 
     ir.nodes = {
         node_id: node
@@ -331,7 +329,7 @@ class IRRewriteBuilder(GraphBuilder):
         np_dtype = onnx.helper.tensor_dtype_to_np_dtype(dtype)
         arr = np.array(value, np_dtype)
         return self.add_array(
-            arr, 
+            arr,
             name=name or f"__const_{value}",
             dtype_code=dtype,
         )
