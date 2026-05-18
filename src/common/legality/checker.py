@@ -12,6 +12,7 @@ import onnx
 from enum import Enum
 
 import argparse
+import os 
 
 
 @dataclass
@@ -106,24 +107,37 @@ class LegalityChecker:
 
 
     # for debugging. 
-    def show_result(self, illegal: dict[str, onnx.NodeProto]) -> None: 
-        print(f'\n\nillegal node information\n\n')
-        print(f'ilegal -> {len(illegal)}')
-        # for name, node in illegal.items():
-        #     print(f'{name}: {node}')
+    def show_result(self, rs: LegalityResult, illegal: dict[str, onnx.NodeProto]) -> None: 
+        for k, v in rs.illegal_ops.items():
+            print(f'{k} -> {v}')
         return 
 
+def find_models(path: str) -> list[str]: 
+    onnx_paths = [
+        os.path.join(root, name)
+        for root, _, files in os.walk(path)
+        for name in files
+        if name.endswith(".onnx")
+    ]
+    return onnx_paths
 
 # checking. 
 def main(): 
     parser = argparse.ArgumentParser()
     parser.add_argument("--path")
     args = parser.parse_args()
-    model = onnx.load(args.path)
-    parser = GraphParser(model)
-    obj = LegalityChecker(model, parser)
-    rs, il = obj.run() 
-    obj.show_result(il)
+
+    models = find_models(args.path)
+    
+    print(f'\n\nillegal node information\n\n')
+    for path in models:
+        model_name = os.path.basename(path)
+        print(f'\nname -> {model_name}\n')
+        model = onnx.load(path)
+        parser = GraphParser(model)
+        obj = LegalityChecker(model, parser)
+        rs, il = obj.run() 
+        obj.show_result(rs, il)
     return
 
 
