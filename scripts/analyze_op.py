@@ -7,6 +7,8 @@ import argparse
 
 import onnx
 from collections import Counter
+from src.common.legality.checker import LegalityChecker
+
 
 class OpAnalyzer:
 
@@ -19,8 +21,8 @@ class OpAnalyzer:
     
     def _get_onnx(self):
         model = onnx.load(self.model_path)
-        ops = Counter(n.op_type for n in model.graph.node)
-        return dict(sorted(ops.items()))
+        self.model = model
+        return 
 
 
     def run(self):

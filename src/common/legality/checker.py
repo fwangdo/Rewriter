@@ -11,6 +11,8 @@ import onnx
 
 from enum import Enum
 
+import argparse
+
 
 @dataclass
 class LegalityResult:
@@ -43,7 +45,6 @@ class LegalityChecker:
                 return LegalitySignal.LEGAL
             else: 
                 return LegalitySignal.ILLEGAL
-        # dynamic indices — cannot verify statically
         return LegalitySignal.ILLEGAL
 
 
@@ -100,5 +101,31 @@ class LegalityChecker:
             if signal != LegalitySignal.LEGAL:
                 for output_name in node.output:
                     illegal[output_name] = node
-
+    
         return result, illegal
+
+
+    # for debugging. 
+    def show_result(self, illegal: dict[str, onnx.NodeProto]) -> None: 
+        print(f'\n\nillegal node information\n\n')
+        print(f'ilegal -> {len(illegal)}')
+        # for name, node in illegal.items():
+        #     print(f'{name}: {node}')
+        return 
+
+
+# checking. 
+def main(): 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path")
+    args = parser.parse_args()
+    model = onnx.load(args.path)
+    parser = GraphParser(model)
+    obj = LegalityChecker(model, parser)
+    rs, il = obj.run() 
+    obj.show_result(il)
+    return
+
+
+if __name__ == "__main__":
+    main()

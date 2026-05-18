@@ -5,6 +5,8 @@ from __future__ import annotations
 import onnx 
 import argparse
 
+from .constant_folding import ConstantFolding 
+
 
 class GraphParser:  
 
@@ -18,11 +20,21 @@ class GraphParser:
         self.initializers: dict[str, onnx.TensorProto] = dict()  # weights/constants
         self.nodes: dict[str, onnx.NodeProto] = dict()  # tensor name -> producing node
 
-        self.parse()
+        self._prepare()
+        self._parse()
         return
 
 
-    def parse(self) -> None:
+    def _prepare(self) -> None:
+        obj = ConstantFolding()
+        obj.prepare(self.model)
+        new_model, logs = obj.run(self.model)
+        self.model = new_model
+        self.graph = new_model.graph
+        return 
+
+
+    def _parse(self) -> None:
         init_names = {i.name for i in self.graph.initializer}
 
         for vi in self.graph.input:
