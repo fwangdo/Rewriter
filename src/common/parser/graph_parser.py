@@ -49,4 +49,3 @@ def main():
     model = onnx.load(args.path)
     obj = GraphParser(model)
     return 
-    
