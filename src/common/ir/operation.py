@@ -42,41 +42,61 @@ from __future__ import annotations
 from typing import Final
 
 
+# Numeric / floating tensor ops
+FULL = "full"
+TRIU = "triu"
+TRIL = "tril"
+SUM = "sum"
+TRANSPOSE = "transpose"
+SQRT = "sqrt"
+ADD = "add"
+SUBTRACT = "subtract"
+MULTIPLY = "multiply"
+DIVIDE = "divide"
+POWER = "power"
+DOT = "dot"
+TENSOR_DOT = "tensordot"
+WHERE = "where"
+
+# Boolean tensor ops
+LESS = "less"
+
+
 FLOAT_OPS: Final[frozenset[str]] = frozenset(
     {
-        "full",
-        "triu",
-        "tril",
-        "sum",
-        "transpose",
-        "sqrt",
-        "add",
-        "subtract",
-        "multiply",
-        "divide",
-        "power",
-        "dot",
-        "tensordot",
-        "where",
+        FULL,
+        TRIU,
+        TRIL,
+        SUM,
+        TRANSPOSE,
+        SQRT,
+        ADD,
+        SUBTRACT,
+        MULTIPLY,
+        DIVIDE,
+        POWER,
+        DOT,
+        TENSOR_DOT,
+        WHERE,
     }
 )
 
 BOOL_OPS: Final[frozenset[str]] = frozenset(
     {
-        "full",
-        "triu",
-        "tril",
-        "less",
+        FULL,
+        TRIU,
+        TRIL,
+        LESS,
     }
 )
 
 BOUNDARY_OPS: Final[frozenset[str]] = frozenset(
     {
-        "dot",
-        "tensordot",
-        "triu",
-        "tril",
-        "where",
+        DOT,
+        TENSOR_DOT,
+        TRIU,
+        TRIL,
+        WHERE,
     }
 )
 
@@ -84,8 +104,23 @@ ATTRIBUTE_SORTS: Final[frozenset[str]] = frozenset({"D", "S"})
 
 
 __all__ = [
+    "ADD",
     "ATTRIBUTE_SORTS",
     "BOOL_OPS",
     "BOUNDARY_OPS",
+    "DIVIDE",
+    "DOT",
     "FLOAT_OPS",
+    "FULL",
+    "LESS",
+    "MULTIPLY",
+    "POWER",
+    "SQRT",
+    "SUBTRACT",
+    "SUM",
+    "TENSOR_DOT",
+    "TRANSPOSE",
+    "TRIL",
+    "TRIU",
+    "WHERE",
 ]

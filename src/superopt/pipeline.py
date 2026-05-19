@@ -187,6 +187,7 @@ def _run_egraph_saturation(
     return egraph, root_cid, blacklist, stats
 
 
+# phase ordering. 
 def superoptimize(
     input_path: str | Path,
     output_path: str | Path,

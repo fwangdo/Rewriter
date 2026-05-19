@@ -6,6 +6,7 @@ import onnx
 import argparse
 
 from .constant_folding import ConstantFolding 
+from .eliminate_id     import EliminateId
 
 
 class GraphParser:  
@@ -26,9 +27,11 @@ class GraphParser:
 
 
     def _prepare(self) -> None:
-        obj = ConstantFolding()
-        obj.prepare(self.model)
-        new_model, logs = obj.run(self.model)
+        cf = ConstantFolding()
+        ei = EliminateId()
+        # obj.prepare(self.model)
+        new_model, logs = cf.run(self.model)
+        new_model, logs = ei.run(new_model)
         self.model = new_model
         self.graph = new_model.graph
         return 
