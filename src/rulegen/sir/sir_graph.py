@@ -111,10 +111,12 @@ class SirGraph:
         if node.id in self.nodes:
             raise ValueError(f"duplicate node id: {node.id}")
         self.nodes[node.id] = node
+        return 
 
     def add_initializer(self, name: str, value: np.ndarray) -> None:
         # already fixed weight value in onnx.  
         self.initializers[name] = value
+        return  
 
     # --- query helpers ---
 

@@ -11,36 +11,11 @@ import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
 
+from src.rulegen.lowering.lower_rules import lower 
+
 logger = logging.getLogger(__name__)
 
 from src.rulegen.sir.sir_graph import SirGraph, SirNode, OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
-
-# matmul
-
-
-# gemm
-
-
-# bn 
-
-
-# gather
-
-
-def lower(onnx_node: onnx.NodeProto):
-    op_name = onnx_node.op_type
-
-    match op_name:
-        case Cons.MAT_MUL: 
-            pass
-            # res = 
-        case Cons.GEMM:
-            pass
-        case Cons.BATCH_NORMALIZATION:
-            pass
-        case Cons.GATHER:
-            pass 
-    return 
 
 _MULTI_OUTPUTS_ATTR = "__outputs"
 _INPUT_SLOTS_ATTR = "__input_slots"
@@ -97,6 +72,7 @@ def onnx_to_sir(model: onnx.ModelProto) -> SirGraph:
         arr = numpy_helper.to_array(init)
         sir.add_initializer(init.name, arr)
         init_names.add(init.name)
+        # weight. 
         sir.add_node(SirNode(
             id=init.name,
             op=OP_WEIGHT,
@@ -112,6 +88,7 @@ def onnx_to_sir(model: onnx.ModelProto) -> SirGraph:
             continue
         shape = _extract_shape(inp)
         dtype = inp.type.tensor_type.elem_type if inp.type.HasField("tensor_type") else None
+        # runtime inputs. 
         sir.add_node(SirNode(
             id=inp.name,
             op=OP_INPUT,
@@ -141,37 +118,42 @@ def onnx_to_sir(model: onnx.ModelProto) -> SirGraph:
 
             base_attrs = dict(attrs)
             base_attrs[_MULTI_OUTPUTS_ATTR] = live_outputs
-            sir.add_node(SirNode(
+            sir_node = SirNode(
                 id=base_id,
                 op=node.op_type,
                 inputs=tuple(input_name for input_name in node.input if input_name),
                 attrs=tuple(sorted(base_attrs.items())),
-            ))
+            )
+            lower(sir, sir_node)
+            # sir.add_node()
 
             # The base node represents the ONNX operation invocation. Each
             # OP_PROJ node below represents one concrete output tensor value.
             for output_index, output_id in enumerate(live_outputs):
-                sir.add_node(SirNode(
+                sir_node = SirNode(
                     id=output_id,
                     op=OP_PROJ,
                     inputs=(base_id,),
                     attrs=(("index", output_index),),
                     shape=_get_value_info_shape(graph, output_id),
                     dtype=_get_value_info_dtype(graph, output_id),
-                ))
+                )
+                lower(sir, sir_node) 
+                # sir.add_node(sir_node)
             continue
 
         if len(live_outputs) != 1:
             raise ValueError(f"expected exactly 1 live output, got {len(live_outputs)}: {live_outputs}")
         output_id = live_outputs[0]  
-        sir.add_node(SirNode(
+        sir_node = SirNode(
             id=output_id,
             op=node.op_type,
             inputs=tuple(input_name for input_name in node.input if input_name),
             attrs=tuple(sorted(attrs.items())),
             shape=_get_value_info_shape(graph, output_id),
             dtype=_get_value_info_dtype(graph, output_id),
-        ))
+        )
+        lower(sir, sir_node)
 
     # --- noop root ---
     output_ids = tuple(o.name for o in graph.output)
@@ -469,5 +451,3 @@ def _make_value_info(
     if shape is not None:
         dims = [dim if dim >= 0 else f"unk_{index}" for index, dim in enumerate(shape)]
     return helper.make_tensor_value_info(name, elem_type, dims)
-
-
