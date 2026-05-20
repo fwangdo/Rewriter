@@ -9,8 +9,8 @@ Rules:
   1. eliminate_trivial_iterators — remove bound="1" iterators
   2. canonicalize_iterator_order — sort iterators by canonical ordering
   3. commute_inputs — swap inputs when body is commutative (mul)
-  4. introduce_conv1x1_contraction_layout — expose a 2D contraction as
-     an NCHW 1x1-conv loop layout
+  4. introduce_conv1x1_contraction_layout — expose a contraction in the
+     same loop/index form as 1x1 Conv
 """
 
 from __future__ import annotations
@@ -42,6 +42,10 @@ def _extra_attrs(attrs: dict) -> tuple[tuple[str, object], ...]:
         for k, v in attrs.items()
         if k not in {"iterators", "indexing_maps", "body"}
     )
+
+
+def _derived(enode: ENode, rule_name: str) -> tuple[str, ...]:
+    return enode.rewrites + (rule_name,)
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +167,12 @@ def _remove_iterators(
         ("indexing_maps", tuple(new_maps)),
         ("body", body),
     ) + _extra_attrs(attrs)
-    return ENode(op="generic", children=enode.children, attrs=new_attrs)
+    return ENode(
+        op="generic",
+        children=enode.children,
+        attrs=new_attrs,
+        rewrites=_derived(enode, "eliminate_trivial_iterators"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +232,12 @@ def canonicalize_iterator_order(egraph: EGraph) -> int:
                 ("indexing_maps", new_maps),
                 ("body", body),
             ) + _extra_attrs(attrs)
-            new_node = ENode(op="generic", children=enode.children, attrs=new_attrs)
+            new_node = ENode(
+                op="generic",
+                children=enode.children,
+                attrs=new_attrs,
+                rewrites=_derived(enode, "canonicalize_iterator_order"),
+            )
             new_cid = egraph.add(new_node)
 
             data = egraph.eclass(cid).data
@@ -304,7 +318,12 @@ def commute_inputs(egraph: EGraph) -> int:
                 ("indexing_maps", new_maps),
                 ("body", body),
             ) + _extra_attrs(attrs)
-            new_node = ENode(op="generic", children=new_children, attrs=new_attrs)
+            new_node = ENode(
+                op="generic",
+                children=new_children,
+                attrs=new_attrs,
+                rewrites=_derived(enode, "commute_inputs"),
+            )
             new_cid = egraph.add(new_node)
 
             data = egraph.eclass(cid).data
@@ -322,24 +341,24 @@ def commute_inputs(egraph: EGraph) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Rule 4: Introduce a Conv1x1 contraction layout
+# Rule 4: Introduce a Conv1x1 contraction form
 # ---------------------------------------------------------------------------
 
 def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
-    """Expose a rank-2/3 contraction as a 1x1-conv loop layout.
+    """Expose a rank-2/3 contraction in the same loop form as 1x1 Conv.
 
     This rule does not inspect the original ONNX op. It only recognizes the
     lower-level contraction form:
 
         out[..., m, n] = sum_k lhs[..., m, k] * rhs[..., k, n]
 
-    and adds an equivalent generic whose indexing maps are in NCHW Conv1x1
-    layout:
+    and adds an equivalent generic whose indexing maps have the same structure
+    as NCHW Conv1x1:
 
         out4[n, oc, h, w] = sum_ic act4[n, ic, h, w] * weight4[oc, ic, 0, 0]
 
     The inserted unit ``w`` dimension and optional unit ``n`` dimension are
-    view/layout structure. Full ONNX reconstruction must materialize them as
+    view structure. Full ONNX reconstruction must materialize them as
     Reshape/Transpose around Conv; no SIR node may remain after lifting.
     """
     count = 0
@@ -349,8 +368,6 @@ def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
                 continue
 
             attrs = dict(enode.attrs)
-            if attrs.get("layout") == "conv1x1_nchw":
-                continue
             if attrs.get("body", ()) != _BODY_MUL_SUM:
                 continue
             if len(enode.children) != 2:
@@ -362,6 +379,7 @@ def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
                     op="generic",
                     children=enode.children,
                     attrs=new_attrs,
+                    rewrites=_derived(enode, "introduce_conv1x1_contraction_layout"),
                 )
                 new_cid = egraph.add(new_node)
                 data = egraph.eclass(cid).data
@@ -518,7 +536,6 @@ def _make_conv1x1_attrs(
         ("iterators", tuple(new_iterators)),
         ("indexing_maps", new_maps),
         ("body", body),
-        ("layout", "conv1x1_nchw"),
     )
 
 

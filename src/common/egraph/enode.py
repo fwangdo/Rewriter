@@ -7,7 +7,7 @@ the same op, children, and attributes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -31,6 +31,7 @@ class ENode:
     op: str
     children: tuple[EClassId, ...]
     attrs: tuple[tuple[str, Any], ...] = ()
+    rewrites: tuple[str, ...] = field(default=(), compare=False, hash=False)
 
     def canonicalize(self, find: dict[EClassId, EClassId]) -> ENode:
         """Return a copy with children mapped through union-find."""
@@ -43,4 +44,9 @@ class ENode:
         
         # op and children are trivial. however, we didnt define attrs cleary yet 
         # so, we have to go over whether canonicalize for attr is enough or not. 
-        return ENode(op=self.op, children=new_children, attrs=self.attrs)
+        return ENode(
+            op=self.op,
+            children=new_children,
+            attrs=self.attrs,
+            rewrites=self.rewrites,
+        )
