@@ -1,3 +1,11 @@
+""" Our ir which is prirmitive operation in our project's scope
+add, mul, sub, div, neg 
+equal, where, reduce
+reshape, transpose, resize, slice, split
+cast, clip, concat, expand, where
+conv2d
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -20,6 +28,11 @@ class BoolSort(IRSort):
     """BoolSort """
 
 
+@dataclass
+class SymbolSort(IRSort):
+    symbol: str  
+
+
 # --- term. 
 @dataclass
 class IRTerm:
@@ -31,24 +44,16 @@ class IRVar(IRTerm):
     sort: IRSort 
     attrs: dict[str, Any] = field(default_factory=dict) 
 
+
+@dataclass
+class IRConstVar(IRTerm):
+    symbol: str 
+
+
 @dataclass
 class IRConst(IRTerm): # for concrete value in IR. 
-    """const template"""
-    # value: float | int | bool | np.ndarray 
-    # sort: IRSort 
-    # attrs: dict[str, Any] = dict() 
-
-@dataclass
-class IRScalarConst(IRTerm):
-    name: str
-    value: bool | int | float | None
-    sort: IRSort
-    attrs: dict[str, Any] = field(default_factory=dict) 
-
-@dataclass
-class IRTensorConst(IRTerm):
     name: str 
-    value: np.ndarray | None 
+    value: np.ndarray | bool | int | float | IRConstVar
     sort: IRSort
     attrs: dict[str, Any] = field(default_factory=dict) 
 
@@ -75,12 +80,10 @@ BOOL_SORT = BoolSort()
 # atom  
 F_X = IRVar("x", FP_SORT)
 F_Y = IRVar("y", FP_SORT)
-F_SCALAR_CONST = IRScalarConst("fp_scalar", None, FP_SORT)
-F_TENSOR_CONST = IRTensorConst("fp_tensor", None, FP_SORT) 
+F_CONST = IRConst("fp_const", IRConstVar("fp_const"), FP_SORT)
 
 B = IRVar("b", BOOL_SORT)
-B_SCALAR_CONST = IRScalarConst("b_scalar", None, BOOL_SORT)
-B_TENSOR_CONST = IRTensorConst("b_tensor", None, BOOL_SORT)
+B_CONST = IRConst("b_const", IRConstVar("b_const"), BOOL_SORT)
 
 IR_F_FULL = ir(IROp.FULL, FP_SORT, shape=HOLE, value=HOLE)
 IR_F_TRIU = ir(IROp.TRIU, FP_SORT, F_X)

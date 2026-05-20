@@ -2,6 +2,15 @@
 
 This module is intentionally declarative.  It describes symbolic expression
 patterns; lowering/lifting code should decide which direction to use them in.
+
+  ConstantOfShape: 19
+  Erf: 76
+  Identity: 3
+  Range: 7
+  Reshape: 656
+  Shape: 525
+  Trilu: 1
+
 """
 from __future__ import annotations
 
@@ -57,6 +66,7 @@ ADD = OpDefinition(
 CAST = OpDefinition(
     name=OnnxOp.CAST,
     onnx=OnnxDef.CAST,
+    # TODO 
     ir=_ir_placeholder("cast", IRDef.F_X, to=IRDef.HOLE),
     constraints={},
 )
@@ -64,10 +74,12 @@ CAST = OpDefinition(
 CONCAT = OpDefinition(
     name=OnnxOp.CONCAT,
     onnx=OnnxDef.CONCAT,
+    # TODO 
     ir=_ir_placeholder("concat", IRDef.F_X, IRDef.F_Y, axis=IRDef.HOLE),
     constraints={},
 )
 
+# tensor generation. 
 CONSTANT_OF_SHAPE = OpDefinition(
     name=OnnxOp.CONSTANT_OF_SHAPE,
     onnx=OnnxDef.CONSTANT_OF_SHAPE,
@@ -85,6 +97,7 @@ DIV = OpDefinition(
 EQUAL = OpDefinition(
     name=OnnxOp.EQUAL,
     onnx=OnnxDef.EQUAL,
+    # TODO 
     ir=IRDef.ir("equal", IRDef.BOOL_SORT, IRDef.F_X, IRDef.F_Y),
     constraints={},
 )
@@ -92,6 +105,7 @@ EQUAL = OpDefinition(
 EXPAND = OpDefinition(
     name=OnnxOp.EXPAND,
     onnx=OnnxDef.EXPAND,
+    # .. 
     ir=_ir_placeholder("expand", IRDef.F_X, shape=IRDef.HOLE),
     constraints={},
 )
@@ -99,6 +113,7 @@ EXPAND = OpDefinition(
 GATHER = OpDefinition(
     name=OnnxOp.GATHER,
     onnx=OnnxDef.GATHER,
+    # should
     ir=_ir_placeholder("gather", IRDef.F_X, indices=IRDef.HOLE, axis=IRDef.HOLE),
     constraints={},
 )
@@ -127,6 +142,7 @@ MUL = OpDefinition(
 NEG = OpDefinition(
     name=OnnxOp.NEG,
     onnx=OnnxDef.NEG,
+    # TODO 
     ir=_ir_placeholder("neg", IRDef.F_X),
     constraints={},
 )
@@ -148,6 +164,7 @@ RANGE = OpDefinition(
 REDUCE_MEAN = OpDefinition(
     name=OnnxOp.REDUCE_MEAN,
     onnx=OnnxDef.REDUCE_MEAN,
+    # TODO, reduction + mean 
     ir=_ir_placeholder("mean", IRDef.F_X, axes=IRDef.HOLE, keepdims=IRDef.HOLE),
     constraints={},
 )
@@ -155,35 +172,35 @@ REDUCE_MEAN = OpDefinition(
 RESHAPE = OpDefinition(
     name=OnnxOp.RESHAPE,
     onnx=OnnxDef.RESHAPE,
-    ir=_ir_placeholder("reshape", IRDef.F_X, shape=IRDef.HOLE),
+    ir=IRDef.RESHAPE, 
     constraints={},
 )
 
 SHAPE = OpDefinition(
     name=OnnxOp.SHAPE,
     onnx=OnnxDef.SHAPE,
-    ir=_ir_placeholder("shape", IRDef.F_X),
+    ir=IRDef.SHAPE,  
     constraints={},
 )
 
 SIGMOID = OpDefinition(
     name=OnnxOp.SIGMOID,
     onnx=OnnxDef.SIGMOID,
-    ir=_ir_placeholder("sigmoid", IRDef.F_X),
+    ir=IRDef.SIGMOID,
     constraints={},
 )
 
 SLICE = OpDefinition(
     name=OnnxOp.SLICE,
     onnx=OnnxDef.SLICE,
-    ir=_ir_placeholder("slice", IRDef.F_X, starts=IRDef.HOLE, ends=IRDef.HOLE, axes=IRDef.HOLE),
+    ir=IRDef.IR_SLICE, # TODO
     constraints={},
 )
 
 SOFTMAX = OpDefinition(
     name=OnnxOp.SOFTMAX,
     onnx=OnnxDef.SOFTMAX,
-    ir=_ir_placeholder("softmax", IRDef.F_X, axis=IRDef.HOLE),
+    ir=IRDef.IR_SOFTMAX, # TODO 
     constraints={},
 )
 
@@ -194,6 +211,7 @@ SQRT = OpDefinition(
     constraints={},
 )
 
+# TODO 
 SQUEEZE = OpDefinition(
     name=OnnxOp.SQUEEZE,
     onnx=OnnxDef.SQUEEZE,
@@ -208,6 +226,7 @@ SUB = OpDefinition(
     constraints={},
 )
 
+# TODO / reshape
 TRANSPOSE = OpDefinition(
     name=OnnxOp.TRANSPOSE,
     onnx=OnnxDef.TRANSPOSE,
@@ -215,6 +234,7 @@ TRANSPOSE = OpDefinition(
     constraints={},
 )
 
+# TODO reduction + reshape. 
 UNSQUEEZE = OpDefinition(
     name=OnnxOp.UNSQUEEZE,
     onnx=OnnxDef.UNSQUEEZE,

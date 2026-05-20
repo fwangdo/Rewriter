@@ -26,7 +26,7 @@ class BoolSort(OnnxSort):
 
 @dataclass
 class SymbolSort(OnnxSort):
-    name: str 
+    symbol: str 
 
 
 # tensor(var / const). 
