@@ -22,6 +22,7 @@ from src.rulegen.sir.tests.matmul import (
 from src.rulegen.lowering.lower_module import onnx_to_sir
 from src.rulegen.sir.sir_to_egraph import sir_to_egraph
 from src.rulegen.rewrite import saturate
+from src.rulegen.lifting import find_conv1x1_lift_candidates, is_conv1x1_generic
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,32 @@ def _show_egraph(egraph, root_cid):
                     print(f"      [{', '.join(dims)}]")
 
 
+def _show_lifting(egraph):
+    structural = [
+        en
+        for cid in egraph.canonical_class_ids()
+        for en in egraph.eclass_nodes(cid)
+        if is_conv1x1_generic(en) is not None
+    ]
+    candidates = find_conv1x1_lift_candidates(egraph)
+
+    print("  [Lifting]")
+    print(f"    structural Conv1x1-form IR: {len(structural)}")
+    print(f"    ONNX Conv materializable: {len(candidates)}")
+    if structural and not candidates:
+        print("    reason: no candidate has a static weight initializer")
+
+    for idx, candidate in enumerate(candidates, start=1):
+        print(f"    candidate {idx}: eclass={candidate.eclass_id}")
+        print(f"      rewrites: {candidate.rewrites}")
+        for node in candidate.subgraph.nodes:
+            attrs = f", attrs={node.attrs}" if node.attrs else ""
+            print(f"      {node.op_type}: {node.inputs} -> {node.outputs}{attrs}")
+        if candidate.subgraph.initializers:
+            init_names = ", ".join(sorted(candidate.subgraph.initializers))
+            print(f"      initializers: {init_names}")
+
+
 def run_test_case(name, model_fn):
     """Run ONNX -> SIR -> EGraph for one test case."""
     print(f"{'='*60}")
@@ -136,6 +163,7 @@ def run_test_case(name, model_fn):
     if count > 0:
         print(f"  [EGraph] (after normalization)")
         _show_egraph(egraph, root_cid)
+    _show_lifting(egraph)
 
     print()
 
@@ -156,7 +184,10 @@ def main() -> None:
         model = onnx.load(args.input)
         sir = onnx_to_sir(model)
         egraph, root_cid = sir_to_egraph(sir)
+        count = saturate(egraph)
         print(f"Loaded {args.input}: {len(sir.nodes)} SIR nodes -> {len(egraph)} e-classes, {egraph.num_enodes} e-nodes")
+        print(f"Normalize: {count} rewrites applied")
+        _show_lifting(egraph)
         return
 
     # Default: run all test cases
