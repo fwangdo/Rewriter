@@ -18,7 +18,7 @@ import onnx
 
 from src.common.rules import RuleSpec, get_all_specs
 from src.common.rules.spec import GraphBuilder, VarCheck
-from src.superopt.egraph.pattern import PatternNode, PatternVar
+from src.common.egraph.pattern import PatternNode, PatternVar
 
 from src.common.compat import run_post_passes, run_pre_passes
 from src.common.ir.convert import ir_to_onnx, onnx_to_ir

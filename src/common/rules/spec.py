@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from src.superopt.egraph.pattern import Pattern, Subst
+from src.common.egraph.pattern import Pattern, Subst
 
 
 @dataclass(frozen=True)

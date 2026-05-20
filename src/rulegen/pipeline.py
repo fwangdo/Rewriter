@@ -14,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import onnx
 
-from .contracts import Contract, check_contract
 from src.common.egraph.eclass import AnalysisData
 from src.common.egraph.egraph import EGraph
 from src.common.egraph.enode import EClassId, ENode
@@ -49,20 +48,6 @@ def _hashable_attrs(
             result.append((k, v))
 
     return tuple(result)
-
-
-@dataclass
-class SuperoptResult:
-    """Summary of a superoptimization run."""
-
-    input_path: str
-    output_path: str
-    original_nodes: int = 0
-    optimized_nodes: int = 0
-    explore_stats: ExploreStats = field(default_factory=ExploreStats)
-    ilp_stats: ILPStats | None = None
-    estimated_cost: float | None = None
-    contract_result: dict[str, object] | None = None
 
 
 def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
@@ -108,7 +93,6 @@ def ir_to_egraph(ir: IRGraph) -> tuple[EGraph, EClassId]:
 
     # Store initializer data on e-graph so rules can access weight arrays.
     egraph.initializers = dict(ir.initializers)
-    egraph.opset_version = ir.opset_version
 
     if ir.root is None:
         raise ValueError("IRGraph has no root node")
@@ -188,62 +172,26 @@ def _run_egraph_saturation(
 
 
 # phase ordering. 
-def superoptimize(
-    input_path: str | Path,
-    output_path: str | Path,
-    supported_ops: frozenset[str] | None = None,
-    max_iter: int = 15,
-    max_nodes: int | None = None,
-    ilp_time_limit_s: float | None = 600,
-    ilp_mip_gap: float | None = None,
-) -> SuperoptResult:
-    """Run the full superoptimization pipeline on an ONNX model.
+def generate_rule(
+) -> None:
+    """Run rule generation based on e-graph.
 
     ONNX ops remain extractable, but a supported-op contract can be attached
     as a post-materialization legality gate.
     """
-    input_path = str(input_path)
-    output_path = str(output_path)
-    contract = (
-        Contract(name="custom", supported_ops=frozenset(supported_ops))
-        if supported_ops is not None
-        else None
-    )
-
+    # 0. load model 
     model, ir = _load_preprocessed_ir(input_path)
-    original_nodes = _count_compute_nodes(ir)
 
-    if max_nodes is None:
-        max_nodes = max(len(ir.nodes) * 5, 2000)
+    max_iters = 15
+    max_nodes = max(len(ir.nodes) * 5, 2000)
 
-    # 1. Saturation
+    # 1. lowering 
+
+    # 2. Saturation based on eq saturation 
     egraph, root_cid, blacklist, stats = _run_egraph_saturation(
-        ir, max_iter, max_nodes,
+        ir, max_iters, max_nodes,
     )
 
-    # 2. Extraction
-    cost_model = CostModel(supported_ops=supported_ops)
-    opt_ir, ilp_stats = extract_ilp(
-        egraph,
-        root_cid,
-        cost_model,
-        blacklist=blacklist,
-        soft_legalization=True,
-        time_limit_s=ilp_time_limit_s,
-        mip_gap=ilp_mip_gap,
-    )
-
-    # 3. Restoration to onnx.
-    opt_model = _make_output_model(opt_ir, ir, model)
-    contract_result = check_contract(opt_model, contract) if contract else None
-    onnx.save(opt_model, output_path)
-
-    return SuperoptResult(
-        input_path=input_path,
-        output_path=output_path,
-        original_nodes=original_nodes,
-        optimized_nodes=_count_compute_nodes(opt_ir),
-        explore_stats=stats,
-        ilp_stats=ilp_stats,
-        contract_result=contract_result,
-    )
+    # 3. lifting. 
+    
+    return 

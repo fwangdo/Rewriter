@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-import src.common.ir.operation as IROp
+import src.common.ir.ir_spec as IROp
 
 # --- sort. 
 class IRSort:
@@ -72,41 +72,6 @@ def ir(op_name: str, sort: IRSort, *children: IRTerm, **attrs: Any) -> IRExpr:
     return IRExpr(op_name, sort, list(children), attrs or temp)
 
 # --- NumPy-like IR vocabulary patterns.
-HOLE = "hole" # signal to fill out. 
-
-FP_SORT   = FPSort()
-BOOL_SORT = BoolSort()
-
-# atom  
-F_X = IRVar("x", FP_SORT)
-F_Y = IRVar("y", FP_SORT)
-F_CONST = IRConst("fp_const", IRConstVar("fp_const"), FP_SORT)
-
-B = IRVar("b", BOOL_SORT)
-B_CONST = IRConst("b_const", IRConstVar("b_const"), BOOL_SORT)
-
-IR_F_FULL = ir(IROp.FULL, FP_SORT, shape=HOLE, value=HOLE)
-IR_F_TRIU = ir(IROp.TRIU, FP_SORT, F_X)
-IR_F_TRIL = ir(IROp.TRIL, FP_SORT, F_X)
-IR_SUM = ir(IROp.SUM, FP_SORT, F_X, axis=HOLE)
-IR_TRANSPOSE = ir(IROp.TRANSPOSE, FP_SORT, F_X, axes=HOLE)
-IR_SQRT = ir(IROp.SQRT, FP_SORT, F_X)
-IR_ADD = ir(IROp.ADD, FP_SORT, F_X, F_Y)
-IR_SUBTRACT = ir(IROp.SUBTRACT, FP_SORT, F_X, F_Y)
-IR_MULTIPLY = ir(IROp.MULTIPLY, FP_SORT, F_X, F_Y)
-IR_DIVIDE = ir(IROp.DIVIDE, FP_SORT, F_X, F_Y)
-IR_POWER = ir(IROp.POWER, FP_SORT, F_X, F_Y)
-IR_DOT = ir(IROp.DOT, FP_SORT, F_X, F_Y)
-IR_TENSORDOT = ir(IROp.TENSOR_DOT, FP_SORT, F_X, F_Y, lhs_axes=HOLE, rhs_axes=HOLE)
-IR_WHERE = ir(IROp.WHERE, FP_SORT, B, F_X, F_Y)
-
-IR_B_FULL = ir(IROp.FULL, BOOL_SORT, shape=HOLE, value=HOLE)
-IR_B_TRIU = ir(IROp.TRIU, BOOL_SORT, B)
-IR_B_TRIL = ir(IROp.TRIL, BOOL_SORT, B)
-IR_LESS = ir(IROp.LESS, BOOL_SORT, F_X, F_Y)
-
-
-# FLOAT   = 1   # float32
 # UINT8   = 2
 # INT8    = 3
 # UINT16  = 4

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .legalization import RuleSpec
-from src.superopt.egraph.pattern import PatternNode as PN, PatternVar as PV
+from src.common.egraph.pattern import PatternNode as PN, PatternVar as PV
 
 
 def get_layout_specs() -> list[RuleSpec]:

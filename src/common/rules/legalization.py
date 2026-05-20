@@ -7,7 +7,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from .spec import GraphBuilder, VarCheck
-from src.superopt.egraph.pattern import Pattern, PatternNode as PN, PatternVar as PV
+from src.common.egraph.pattern import Pattern, PatternNode as PN, PatternVar as PV
 
 BuildFn = Callable[[GraphBuilder, dict[str, Any]], Any]
 
