@@ -18,14 +18,17 @@ from src.common.egraph.eclass import AnalysisData
 from src.common.egraph.egraph import EGraph
 from src.common.egraph.enode import EClassId, ENode
 from src.common.explore.explorer import explore, ExploreStats
-from src.common.extract.cost import CostModel
-from src.common.extract.ilp import ILPStats, extract_ilp
+# from src.common.extract.cost import CostModel
+# from src.common.extract.ilp import ILPStats, extract_ilp
 
-from src.common.compat import run_post_passes, run_pre_passes
+# from src.common.compat import run_post_passes, run_pre_passes
 from src.common.ir.convert import ir_to_onnx, onnx_to_ir
 from src.common.ir.graph import IRGraph
 from src.common.ir.node import OP_INPUT, OP_NOOP, OP_PROJ, OP_WEIGHT
 from src.common.rules import get_all_specs
+
+# clean up
+from src.common.parser.graph_parser import GraphParser
 
 #.. 
 import sys 
@@ -173,6 +176,7 @@ def _run_egraph_saturation(
 
 # phase ordering. 
 def generate_rule(
+    target_model: onnx.ModelProto
 ) -> None:
     """Run rule generation based on e-graph.
 
@@ -180,17 +184,16 @@ def generate_rule(
     as a post-materialization legality gate.
     """
     # 0. load model 
-    model, ir = _load_preprocessed_ir(input_path)
-
-    max_iters = 15
-    max_nodes = max(len(ir.nodes) * 5, 2000)
+    parser = GraphParser(target_model)
 
     # 1. lowering 
 
     # 2. Saturation based on eq saturation 
-    egraph, root_cid, blacklist, stats = _run_egraph_saturation(
-        ir, max_iters, max_nodes,
-    )
+    # max_iters = 15
+    # max_nodes = max(len(ir.nodes) * 5, 2000)
+    # egraph, root_cid, blacklist, stats = _run_egraph_saturation(
+    #     ir, max_iters, max_nodes,
+    # )
 
     # 3. lifting. 
     

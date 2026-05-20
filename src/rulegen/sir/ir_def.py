@@ -11,8 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import numpy as np
-import src.common.ir.ir_spec as IROp
+# import numpy as np
+# import src.rulegen.sir.ir_spec as IROp
 
 # --- sort. 
 class IRSort:
@@ -35,41 +35,22 @@ class SymbolSort(IRSort):
 
 # --- term. 
 @dataclass
-class IRTerm:
+class SirTerm:
     """Base class for IR pattern terms."""
 
 @dataclass
-class IRVar(IRTerm):
-    name: str
+class SirLeaf(SirTerm):
     sort: IRSort 
-    attrs: dict[str, Any] = field(default_factory=dict) 
+    attrs: dict[str, Any] = field(default_factory=dict) # if it is constant, it would be represented asd "value." 
 
 
 @dataclass
-class IRConstVar(IRTerm):
-    symbol: str 
-
-
-@dataclass
-class IRConst(IRTerm): # for concrete value in IR. 
-    name: str 
-    value: np.ndarray | bool | int | float | IRConstVar
-    sort: IRSort
-    attrs: dict[str, Any] = field(default_factory=dict) 
-
-
-@dataclass
-class IRExpr(IRTerm):
+class SirExpr(SirTerm):
     op_name: str
     sort: IRSort
-    children: list[IRTerm]
+    children: list[SirTerm]
     attrs: dict[str, Any] = field(default_factory=dict) 
 
-
-# note that, we have to define what attrs would be in our ir.. 
-def ir(op_name: str, sort: IRSort, *children: IRTerm, **attrs: Any) -> IRExpr:
-    temp = dict()
-    return IRExpr(op_name, sort, list(children), attrs or temp)
 
 # --- NumPy-like IR vocabulary patterns.
 # UINT8   = 2
