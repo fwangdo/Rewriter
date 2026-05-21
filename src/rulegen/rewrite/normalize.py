@@ -1,16 +1,15 @@
 """Domain-independent normalization rules for generic e-nodes.
 
 These rules transform the structural metadata (iterators, indexing maps)
-of generic e-nodes into canonical form.  When both MatMul and Conv are
-lowered and these rules are saturated, their generic nodes converge to
-the same canonical representation and the e-graph merges them.
+of generic e-nodes into equivalent forms.  Target-specific names are kept
+out of rewrite attrs; backend ops are recognized later by structural lifting.
 
 Rules:
   1. eliminate_trivial_iterators — remove bound="1" iterators
   2. canonicalize_iterator_order — sort iterators by canonical ordering
   3. commute_inputs — swap inputs when body is commutative (mul)
-  4. introduce_conv1x1_contraction_layout — expose a contraction in the
-     same loop/index form as 1x1 Conv
+  4. introduce_rank4_unit_contraction_view — expose a contraction as a
+     rank-4 unit-spatial contraction view
 """
 
 from __future__ import annotations
@@ -341,25 +340,25 @@ def commute_inputs(egraph: EGraph) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Rule 4: Introduce a Conv1x1 contraction form
+# Rule 4: Introduce a rank-4 unit contraction view
 # ---------------------------------------------------------------------------
 
-def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
-    """Expose a rank-2/3 contraction in the same loop form as 1x1 Conv.
+def introduce_rank4_unit_contraction_view(egraph: EGraph) -> int:
+    """Expose a rank-2/3 contraction as a rank-4 unit-spatial view.
 
-    This rule does not inspect the original ONNX op. It only recognizes the
-    lower-level contraction form:
+    This rule does not inspect the original ONNX op or any target backend op.
+    It only recognizes the lower-level contraction form:
 
         out[..., m, n] = sum_k lhs[..., m, k] * rhs[..., k, n]
 
-    and adds an equivalent generic whose indexing maps have the same structure
-    as NCHW Conv1x1:
+    and adds an equivalent generic with explicit outer/channel/spatial/unit
+    axes:
 
-        out4[n, oc, h, w] = sum_ic act4[n, ic, h, w] * weight4[oc, ic, 0, 0]
+        out4[o, c, s, u] = sum_r lhs4[o, r, s, u] * rhs4[c, r, 0, 0]
 
     The inserted unit ``w`` dimension and optional unit ``n`` dimension are
-    view structure. Full ONNX reconstruction must materialize them as
-    Reshape/Transpose around Conv; no SIR node may remain after lifting.
+    view structure. Later lifting may recognize this structure as a supported
+    backend op, but the rewrite itself is just a contraction view expansion.
     """
     count = 0
     for cid in egraph.canonical_class_ids():
@@ -373,13 +372,13 @@ def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
             if len(enode.children) != 2:
                 continue
 
-            variants = _conv1x1_layout_variants(attrs)
+            variants = _rank4_unit_contraction_variants(attrs)
             for new_attrs in variants:
                 new_node = ENode(
                     op="generic",
                     children=enode.children,
                     attrs=new_attrs,
-                    rewrites=_derived(enode, "introduce_conv1x1_contraction_layout"),
+                    rewrites=_derived(enode, "introduce_rank4_unit_contraction_view"),
                 )
                 new_cid = egraph.add(new_node)
                 data = egraph.eclass(cid).data
@@ -396,7 +395,7 @@ def introduce_conv1x1_contraction_layout(egraph: EGraph) -> int:
     return count
 
 
-def _conv1x1_layout_variants(attrs: dict) -> list[tuple[tuple[str, object], ...]]:
+def _rank4_unit_contraction_variants(attrs: dict) -> list[tuple[tuple[str, object], ...]]:
     iterators = attrs.get("iterators", ())
     maps = attrs.get("indexing_maps", ())
     body = attrs.get("body", ())
@@ -413,25 +412,26 @@ def _conv1x1_layout_variants(attrs: dict) -> list[tuple[tuple[str, object], ...]
         return []
     k_idx = reduction[0]
 
-    # Conv has a single N dimension. For now, do not flatten multiple batch
-    # iterators into one because that needs an explicit affine/non-affine view.
+    # This rank-4 view has one outer dimension. For now, do not flatten
+    # multiple batch iterators into one because that needs an explicit
+    # non-affine view.
     if len(output_indices) not in (2, 3):
         return []
 
     variants: list[tuple[tuple[str, object], ...]] = []
-    variants.extend(_conv1x1_right_weight_layout(iterators, maps, output_indices, k_idx, body))
-    variants.extend(_conv1x1_left_weight_layout(iterators, maps, output_indices, k_idx, body))
+    variants.extend(_rank4_right_factor_view(iterators, maps, output_indices, k_idx, body))
+    variants.extend(_rank4_left_factor_view(iterators, maps, output_indices, k_idx, body))
     return variants
 
 
-def _conv1x1_right_weight_layout(
+def _rank4_right_factor_view(
     iterators: tuple[str, ...],
     maps: tuple,
     output_indices: list[int],
     k_idx: int,
     body: tuple,
 ) -> list[tuple[tuple[str, object], ...]]:
-    # lhs[..., m, k], rhs[k, oc] -> Conv(act=lhs, weight=rhs)
+    # lhs[..., s, r], rhs[r, c] -> lhs4[o, r, s, u], rhs4[c, r, 0, 0]
     lhs_map, rhs_map, _ = maps
     lhs_indices = _map_variable_indices(lhs_map)
     rhs_indices = _map_variable_indices(rhs_map)
@@ -448,7 +448,7 @@ def _conv1x1_right_weight_layout(
     if lhs_indices != expected_lhs or rhs_indices != expected_rhs:
         return []
 
-    return [_make_conv1x1_attrs(
+    return [_make_rank4_unit_contraction_attrs(
         iterators=iterators,
         batch_idx=batch_idx,
         oc_idx=oc_idx,
@@ -458,15 +458,15 @@ def _conv1x1_right_weight_layout(
     )]
 
 
-def _conv1x1_left_weight_layout(
+def _rank4_left_factor_view(
     iterators: tuple[str, ...],
     maps: tuple,
     output_indices: list[int],
     k_idx: int,
     body: tuple,
 ) -> list[tuple[tuple[str, object], ...]]:
-    # lhs[oc, k], rhs[..., k, h] -> Conv(act=rhs, weight=lhs).
-    # This keeps child order unchanged, so the weight map is still first.
+    # lhs[c, r], rhs[..., r, s] -> lhs4[c, r, 0, 0], rhs4[o, r, s, u].
+    # This keeps child order unchanged, so the left factor map is still first.
     lhs_map, rhs_map, _ = maps
     lhs_indices = _map_variable_indices(lhs_map)
     rhs_indices = _map_variable_indices(rhs_map)
@@ -483,7 +483,7 @@ def _conv1x1_left_weight_layout(
     if lhs_indices != expected_lhs or rhs_indices != expected_rhs:
         return []
 
-    return [_make_conv1x1_attrs(
+    return [_make_rank4_unit_contraction_attrs(
         iterators=iterators,
         batch_idx=batch_idx,
         oc_idx=oc_idx,
@@ -494,7 +494,7 @@ def _conv1x1_left_weight_layout(
     )]
 
 
-def _make_conv1x1_attrs(
+def _make_rank4_unit_contraction_attrs(
     iterators: tuple[str, ...],
     batch_idx: int | None,
     oc_idx: int,
@@ -585,7 +585,7 @@ def saturate(egraph: EGraph, max_iterations: int = 10) -> int:
         n += eliminate_trivial_iterators(egraph)
         n += canonicalize_iterator_order(egraph)
         n += commute_inputs(egraph)
-        n += introduce_conv1x1_contraction_layout(egraph)
+        n += introduce_rank4_unit_contraction_view(egraph)
         if n == 0:
             break
         total += n

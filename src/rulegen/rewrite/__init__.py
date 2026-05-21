@@ -1,16 +1,14 @@
 """Rewrite rules for the SIR-level e-graph.
 
-These are domain-independent normalization rules. When applied to
-saturation, different high-level ops (MatMul, Conv, etc.) that have
-been lowered to generic form will converge to the same canonical form
-and be automatically merged by the e-graph.
+These are target-independent normalization rules over lowered generic
+contractions. Backend-specific ops are recognized later by structural lifting.
 """
 
 from src.rulegen.rewrite.normalize import (
     eliminate_trivial_iterators,
     canonicalize_iterator_order,
     commute_inputs,
-    introduce_conv1x1_contraction_layout,
+    introduce_rank4_unit_contraction_view,
     saturate,
 )
 
@@ -18,6 +16,6 @@ __all__ = [
     "eliminate_trivial_iterators",
     "canonicalize_iterator_order",
     "commute_inputs",
-    "introduce_conv1x1_contraction_layout",
+    "introduce_rank4_unit_contraction_view",
     "saturate",
 ]
